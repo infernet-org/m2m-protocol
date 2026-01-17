@@ -19,8 +19,10 @@ use m2m::{
     codec::{Algorithm, CodecEngine},
     is_m2m_format,
     models::ModelRegistry,
+    proxy::{ProxyConfig, ProxyServer},
     security::SecurityScanner,
     server::{create_router, AppState, ServerConfig},
+    transport::{QuicTransportConfig, TransportKind},
     VERSION,
 };
 use serde_json::Value;
@@ -149,6 +151,57 @@ enum Commands {
         #[arg(short, long)]
         verbose: bool,
     },
+
+    /// Start the OpenAI-compatible proxy with transport options
+    Proxy {
+        /// TCP listen port
+        #[arg(short, long, default_value = "8080")]
+        port: u16,
+
+        /// Listen host
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+
+        /// Upstream LLM API URL
+        #[arg(short, long)]
+        upstream: String,
+
+        /// API key for upstream (or use env OPENAI_API_KEY)
+        #[arg(short = 'k', long)]
+        api_key: Option<String>,
+
+        /// Transport type: tcp, quic, both
+        #[arg(short, long, default_value = "tcp")]
+        transport: String,
+
+        /// QUIC listen port (default: TCP port + 363)
+        #[arg(long)]
+        quic_port: Option<u16>,
+
+        /// Path to TLS certificate (for QUIC)
+        #[arg(long)]
+        cert: Option<PathBuf>,
+
+        /// Path to TLS private key (for QUIC)
+        #[arg(long)]
+        key: Option<PathBuf>,
+
+        /// Enable security scanning
+        #[arg(long)]
+        security: bool,
+
+        /// Security blocking threshold (0.0 - 1.0)
+        #[arg(long, default_value = "0.8")]
+        threshold: f32,
+
+        /// Request timeout in seconds
+        #[arg(long, default_value = "120")]
+        timeout: u64,
+
+        /// Enable verbose logging
+        #[arg(short, long)]
+        verbose: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -222,6 +275,24 @@ fn main() -> anyhow::Result<()> {
             no_security,
             model,
             verbose,
+        ),
+
+        Commands::Proxy {
+            port,
+            host,
+            upstream,
+            api_key,
+            transport,
+            quic_port,
+            cert,
+            key,
+            security,
+            threshold,
+            timeout,
+            verbose,
+        } => cmd_proxy(
+            port, host, upstream, api_key, transport, quic_port, cert, key, security, threshold,
+            timeout, verbose,
         ),
     }
 }
@@ -552,6 +623,87 @@ fn cmd_server(
         let listener = tokio::net::TcpListener::bind(config.addr).await?;
         axum::serve(listener, app).await?;
         Ok::<_, anyhow::Error>(())
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn cmd_proxy(
+    port: u16,
+    host: String,
+    upstream: String,
+    api_key: Option<String>,
+    transport: String,
+    quic_port: Option<u16>,
+    cert: Option<PathBuf>,
+    key: Option<PathBuf>,
+    security: bool,
+    threshold: f32,
+    timeout: u64,
+    verbose: bool,
+) -> anyhow::Result<()> {
+    // Initialize logging
+    let log_level = if verbose { "debug" } else { "info" };
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(log_level)),
+        )
+        .init();
+
+    // Parse transport kind
+    let transport_kind = TransportKind::from_str(&transport).ok_or_else(|| {
+        anyhow::anyhow!("Invalid transport: {}. Use: tcp, quic, both", transport)
+    })?;
+
+    // Get API key from arg or environment
+    let api_key = api_key.or_else(|| std::env::var("OPENAI_API_KEY").ok());
+
+    // Build listen address
+    let listen_addr: std::net::SocketAddr = format!("{host}:{port}").parse()?;
+
+    // Build QUIC config if needed
+    let quic_config = if matches!(transport_kind, TransportKind::Quic | TransportKind::Both) {
+        let quic_addr = std::net::SocketAddr::from((
+            listen_addr.ip(),
+            quic_port.unwrap_or(port + 363), // Default: TCP port + 363 (8080 -> 8443)
+        ));
+
+        let tls = if let (Some(cert_path), Some(key_path)) = (cert, key) {
+            m2m::transport::TlsConfig::production(cert_path, key_path)
+        } else {
+            tracing::warn!("No TLS certificates provided, using self-signed (development only)");
+            m2m::transport::TlsConfig::development()
+        };
+
+        Some(QuicTransportConfig {
+            listen_addr: quic_addr,
+            tls,
+            ..Default::default()
+        })
+    } else {
+        None
+    };
+
+    // Build proxy config
+    let config = ProxyConfig {
+        listen_addr,
+        upstream_url: upstream,
+        api_key,
+        compress_requests: true,
+        compress_responses: true,
+        security_scanning: security,
+        security_threshold: threshold,
+        timeout_secs: timeout,
+        transport: transport_kind,
+        quic_config,
+    };
+
+    // Create and run proxy server
+    let server = ProxyServer::new(config);
+
+    let runtime = tokio::runtime::Runtime::new()?;
+    runtime.block_on(async {
+        server.run().await.map_err(|e| anyhow::anyhow!("{}", e))
     })
 }
 

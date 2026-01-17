@@ -84,8 +84,9 @@ Client                          Server
 
 | Protocol | Relationship |
 |----------|--------------|
-| HTTP/1.1, HTTP/2 | M2M operates over HTTP as transport |
-| TLS 1.2+ | Required for transport security |
+| HTTP/1.1, HTTP/2, HTTP/3 | M2M operates over HTTP as transport |
+| QUIC (RFC 9000) | Preferred transport for agent-to-agent communication |
+| TLS 1.2+ / TLS 1.3 | Required for transport security (built-in with QUIC) |
 | JSON (RFC 8259) | Wire format is JSON-compatible |
 | OpenAI API | Primary target for compression |
 | SSE | Streaming responses supported |

@@ -178,6 +178,7 @@ pub mod protocol;
 pub mod proxy;
 pub mod security;
 pub mod server;
+pub mod transport;
 
 // Re-exports for convenience
 pub use codec::{Algorithm, CodecEngine, CompressionResult, StreamingCodec, StreamingDecompressor};
@@ -189,6 +190,7 @@ pub use protocol::{Capabilities, Message, Session, SessionState};
 pub use proxy::{ProxyConfig, ProxyServer, ProxyStats};
 pub use security::{ScanResult, SecurityScanner};
 pub use server::{AppState, ServerConfig};
+pub use transport::{QuicTransport, QuicTransportConfig, TcpTransport, Transport, TransportKind};
 
 /// Library version
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

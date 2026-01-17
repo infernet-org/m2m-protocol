@@ -1,11 +1,18 @@
 # M2M Protocol
 
+[![Build Status](https://github.com/infernet-org/m2m-protocol/actions/workflows/ci.yml/badge.svg)](https://github.com/infernet-org/m2m-protocol/actions)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![Rust](https://img.shields.io/badge/rust-1.75+-orange.svg)](https://www.rust-lang.org/)
+
+> Created by [Infernet](https://infernet.org) — The Internet of Autonomous Intelligence.
+
 High-performance Machine-to-Machine protocol for LLM API communication with intelligent compression, security scanning, and an OpenAI-compatible proxy.
 
 ## Features
 
 - **Multi-codec compression** - Token (~30% savings), Brotli (high-ratio), Dictionary
 - **OpenAI-compatible proxy** - Drop-in reverse proxy for any OpenAI-compatible API
+- **QUIC/HTTP3 transport** - 0-RTT, no head-of-line blocking, connection migration
 - **Protocol negotiation** - HELLO/ACCEPT handshake with capability exchange
 - **ML-based routing** - [Hydra SLM](https://huggingface.co/infernet/hydra) for intelligent algorithm selection
 - **Security scanning** - Threat detection for prompt injection/jailbreaks
@@ -25,14 +32,17 @@ The M2M proxy works with **any OpenAI-compatible API endpoint** - not just OpenA
 
 ```bash
 # Start proxy forwarding to local Ollama
-m2m server --port 8080 --upstream http://localhost:11434/v1
+m2m proxy --port 8080 --upstream http://localhost:11434/v1
+
+# With QUIC transport for agent-to-agent communication
+m2m proxy --port 8080 --upstream http://localhost:11434/v1 --transport both --quic-port 8443
 
 # Point your app to the proxy
 curl http://localhost:8080/v1/chat/completions \
   -d '{"model": "llama3.2", "messages": [{"role": "user", "content": "Hello"}]}'
 ```
 
-See [docs/PROXY.md](docs/PROXY.md) for full proxy documentation.
+See [docs/guides/proxy.md](docs/guides/proxy.md) for full proxy documentation.
 
 ## Supported Models
 
@@ -147,9 +157,14 @@ m2m models list
 # Search models
 m2m models search "llama"
 
-# Start proxy server
-m2m server --port 8080 --upstream http://localhost:11434/v1
-m2m server --port 8080 --upstream http://localhost:11434/v1 --security --threshold 0.8
+# Start proxy server (TCP)
+m2m proxy --port 8080 --upstream http://localhost:11434/v1
+
+# Start proxy with QUIC transport
+m2m proxy --port 8080 --upstream http://localhost:11434/v1 --transport quic --quic-port 8443
+
+# Start proxy with security scanning
+m2m proxy --port 8080 --upstream http://localhost:11434/v1 --security --threshold 0.8
 ```
 
 ## Protocol Overview
@@ -276,17 +291,19 @@ prefer_token_for_api = true
 
 ## Documentation
 
-- [Proxy Guide](docs/PROXY.md) - Full proxy server documentation
-- [Technical Design](docs/TECHNICAL_DESIGN.md) - Architecture and implementation details
-- [Implementation Roadmap](docs/IMPLEMENTATION_ROADMAP.md) - Development milestones
-- [PRD](docs/PRD.md) - Product requirements document
+- [Protocol Specification](docs/spec/00-introduction.md) - Formal protocol specification
+- [Proxy Guide](docs/guides/proxy.md) - Full proxy server documentation
+- [Quick Start](docs/guides/quickstart.md) - Getting started guide
+- [Configuration Reference](docs/reference/configuration.md) - Configuration options
+- [Changelog](docs/CHANGELOG.md) - Version history
 
 ## License
 
-Apache-2.0
+Apache-2.0 — Copyright © 2026 [Infernet](https://infernet.org)
 
 ## Links
 
+- [Infernet](https://infernet.org) - The Internet of Autonomous Intelligence
 - [Hydra Model (HuggingFace)](https://huggingface.co/infernet/hydra)
 - [API Documentation](https://docs.rs/m2m)
 - [GitHub](https://github.com/infernet-org/m2m-protocol)

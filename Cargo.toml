@@ -39,7 +39,7 @@ tokio = { version = "1.0", features = ["rt-multi-thread", "macros", "net", "sync
 
 # HTTP server
 axum = "0.7"
-tower = "0.4"
+tower = { version = "0.4", features = ["util"] }
 tower-http = { version = "0.5", features = ["cors", "trace"] }
 
 # HTTP client
@@ -86,6 +86,21 @@ bytes = "1.0"
 # Regex for pattern matching (security)
 regex = { version = "1.0", features = ["perf"] }
 lazy_static = "1.4"
+
+# === QUIC Transport ===
+# QUIC implementation (using quinn 0.10 for h3-quinn compatibility)
+quinn = "0.10"
+rustls = { version = "0.21", default-features = false, features = ["dangerous_configuration", "quic", "tls12"] }
+rcgen = "0.12"  # Self-signed cert generation for dev
+rustls-pemfile = "1.0"
+
+# HTTP/3 layer (h3-quinn 0.0.5 requires h3 0.0.4)
+h3 = "0.0.4"
+h3-quinn = "0.0.5"
+
+# Async streams for h3
+http = "1.0"
+http-body-util = "0.1"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

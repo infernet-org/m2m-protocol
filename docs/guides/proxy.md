@@ -57,17 +57,46 @@ The OpenAI chat completion API has become the de facto standard for LLM inferenc
 
 ```bash
 # Basic usage - forwards to local Ollama
-m2m server --port 8080 --upstream http://localhost:11434/v1
+m2m proxy --port 8080 --upstream http://localhost:11434/v1
 
 # Forward to vLLM
-m2m server --port 8080 --upstream http://vllm-server:8000/v1
+m2m proxy --port 8080 --upstream http://vllm-server:8000/v1
 
 # Forward to OpenAI with API key
-m2m server --port 8080 --upstream https://api.openai.com/v1 --api-key $OPENAI_API_KEY
+m2m proxy --port 8080 --upstream https://api.openai.com/v1 --api-key $OPENAI_API_KEY
 
 # With security scanning enabled
-m2m server --port 8080 --upstream http://localhost:11434/v1 --security --threshold 0.8
+m2m proxy --port 8080 --upstream http://localhost:11434/v1 --security --threshold 0.8
 ```
+
+### Transport Options
+
+The proxy supports multiple transport protocols:
+
+```bash
+# TCP only (default)
+m2m proxy --port 8080 --upstream http://localhost:11434/v1 --transport tcp
+
+# QUIC/HTTP3 only (requires TLS)
+m2m proxy --port 8443 --upstream http://localhost:11434/v1 --transport quic
+
+# Both TCP and QUIC simultaneously
+m2m proxy --port 8080 --upstream http://localhost:11434/v1 --transport both --quic-port 8443
+
+# QUIC with custom certificates (production)
+m2m proxy --port 8443 --upstream http://localhost:11434/v1 --transport quic \
+  --cert /path/to/cert.pem --key /path/to/key.pem
+```
+
+#### QUIC Benefits
+
+| Feature | Benefit |
+|---------|---------|
+| **0-RTT Connection** | Reduced latency for returning connections |
+| **No Head-of-Line Blocking** | Multiplexed streams don't block each other |
+| **Connection Migration** | Survives network changes (WiFi → cellular) |
+| **Built-in TLS 1.3** | Secure by default, no separate TLS handshake |
+| **BBR Congestion Control** | Better throughput on lossy networks |
 
 ### Configuration
 
@@ -170,7 +199,7 @@ SSE chunks are compressed individually using the streaming codec, which:
 ollama run llama3.2
 
 # Start M2M proxy
-m2m server --port 8080 --upstream http://localhost:11434/v1
+m2m proxy --port 8080 --upstream http://localhost:11434/v1
 
 # Use normally
 curl http://localhost:8080/v1/chat/completions \
@@ -186,7 +215,7 @@ python -m vllm.entrypoints.openai.api_server \
   --port 8000
 
 # Start M2M proxy
-m2m server --port 8080 --upstream http://localhost:8000/v1
+m2m proxy --port 8080 --upstream http://localhost:8000/v1
 
 # Use normally
 curl http://localhost:8080/v1/chat/completions \
@@ -204,10 +233,10 @@ When enabled, the proxy scans all incoming requests for:
 
 ```bash
 # Enable blocking mode (rejects threats)
-m2m server --port 8080 --upstream ... --security --threshold 0.8
+m2m proxy --port 8080 --upstream ... --security --threshold 0.8
 
 # Enable monitoring mode (logs but doesn't block)
-m2m server --port 8080 --upstream ... --security --threshold 0.0
+m2m proxy --port 8080 --upstream ... --security --threshold 0.0
 ```
 
 ## Performance

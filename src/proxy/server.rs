@@ -53,13 +53,14 @@ use tokio::sync::broadcast;
 use crate::codec::{Algorithm, CodecEngine};
 use crate::error::Result;
 use crate::security::SecurityScanner;
+use crate::transport::{QuicTransport, QuicTransportConfig, TcpTransport, Transport, TransportKind};
 
 use super::stats::{ProxyStats, StatsSummary};
 
 /// Proxy server configuration
 #[derive(Debug, Clone)]
 pub struct ProxyConfig {
-    /// Address to listen on
+    /// Address to listen on (TCP)
     pub listen_addr: SocketAddr,
     /// Upstream LLM API URL (e.g., "https://openrouter.ai/api/v1")
     pub upstream_url: String,
@@ -75,6 +76,10 @@ pub struct ProxyConfig {
     pub security_threshold: f32,
     /// Request timeout in seconds
     pub timeout_secs: u64,
+    /// Transport type (TCP, QUIC, or Both)
+    pub transport: TransportKind,
+    /// QUIC transport configuration (if transport is QUIC or Both)
+    pub quic_config: Option<QuicTransportConfig>,
 }
 
 impl Default for ProxyConfig {
@@ -88,6 +93,8 @@ impl Default for ProxyConfig {
             security_scanning: true,
             security_threshold: 0.8,
             timeout_secs: 120,
+            transport: TransportKind::Tcp,
+            quic_config: None,
         }
     }
 }
@@ -153,28 +160,85 @@ impl ProxyServer {
             .with_state(self.state.clone())
     }
 
-    /// Run the proxy server
+    /// Run the proxy server with the configured transport.
     pub async fn run(&self) -> Result<()> {
-        let addr = self.state.config.listen_addr;
         let router = self.router();
 
-        tracing::info!("M2M Proxy listening on {}", addr);
+        tracing::info!("M2M Proxy starting...");
         tracing::info!("Upstream: {}", self.state.config.upstream_url);
         tracing::info!(
             "Compression: requests={}, responses={}",
             self.state.config.compress_requests,
             self.state.config.compress_responses
         );
+        tracing::info!("Transport: {}", self.state.config.transport);
 
-        let listener = tokio::net::TcpListener::bind(addr).await.map_err(|e| {
-            crate::error::M2MError::Server(format!("Failed to bind to {}: {}", addr, e))
-        })?;
+        match self.state.config.transport {
+            TransportKind::Tcp => self.run_tcp(router).await,
+            TransportKind::Quic => self.run_quic(router).await,
+            TransportKind::Both => self.run_both(router).await,
+        }
+    }
 
-        axum::serve(listener, router)
-            .await
-            .map_err(|e| crate::error::M2MError::Server(format!("Server error: {}", e)))?;
+    /// Run with TCP transport only.
+    async fn run_tcp(&self, router: Router) -> Result<()> {
+        let transport = TcpTransport::new(self.state.config.listen_addr);
+        tracing::info!("TCP listening on {}", transport.listen_addr());
+        transport.serve(router).await
+    }
 
-        Ok(())
+    /// Run with QUIC transport only.
+    async fn run_quic(&self, router: Router) -> Result<()> {
+        let quic_config = self.state.config.quic_config.clone()
+            .unwrap_or_else(|| {
+                let mut config = QuicTransportConfig::development();
+                config.listen_addr = SocketAddr::from((
+                    self.state.config.listen_addr.ip(),
+                    self.state.config.listen_addr.port(),
+                ));
+                config
+            });
+
+        let transport = QuicTransport::new(quic_config);
+        tracing::info!("QUIC listening on {}", transport.listen_addr());
+        transport.serve(router).await
+    }
+
+    /// Run with both TCP and QUIC transports.
+    async fn run_both(&self, router: Router) -> Result<()> {
+        let tcp_router = router.clone();
+        let quic_router = router;
+
+        // TCP transport
+        let tcp_addr = self.state.config.listen_addr;
+        let tcp_transport = TcpTransport::new(tcp_addr);
+        tracing::info!("TCP listening on {}", tcp_transport.listen_addr());
+
+        // QUIC transport
+        let quic_config = self.state.config.quic_config.clone()
+            .unwrap_or_else(|| {
+                let mut config = QuicTransportConfig::development();
+                // QUIC uses a different port by default (TCP port + 363)
+                config.listen_addr = SocketAddr::from((
+                    tcp_addr.ip(),
+                    tcp_addr.port() + 363,  // 8080 -> 8443
+                ));
+                config
+            });
+        let quic_transport = QuicTransport::new(quic_config);
+        tracing::info!("QUIC listening on {}", quic_transport.listen_addr());
+
+        // Run both transports concurrently
+        tokio::select! {
+            result = tcp_transport.serve(tcp_router) => {
+                tracing::info!("TCP transport stopped");
+                result
+            }
+            result = quic_transport.serve(quic_router) => {
+                tracing::info!("QUIC transport stopped");
+                result
+            }
+        }
     }
 
     /// Get statistics
