@@ -53,7 +53,9 @@ use tokio::sync::broadcast;
 use crate::codec::{Algorithm, CodecEngine};
 use crate::error::Result;
 use crate::security::SecurityScanner;
-use crate::transport::{QuicTransport, QuicTransportConfig, TcpTransport, Transport, TransportKind};
+use crate::transport::{
+    QuicTransport, QuicTransportConfig, TcpTransport, Transport, TransportKind,
+};
 
 use super::stats::{ProxyStats, StatsSummary};
 
@@ -105,7 +107,7 @@ pub struct ProxyState {
     client: Client,
     codec: CodecEngine,
     scanner: SecurityScanner,
-    stats: ProxyStats,
+    stats: Arc<ProxyStats>,
     shutdown_tx: broadcast::Sender<()>,
 }
 
@@ -125,7 +127,7 @@ impl ProxyState {
             client,
             codec: CodecEngine::new(),
             scanner,
-            stats: ProxyStats::new(),
+            stats: Arc::new(ProxyStats::new()),
             shutdown_tx,
         }
     }
@@ -189,15 +191,14 @@ impl ProxyServer {
 
     /// Run with QUIC transport only.
     async fn run_quic(&self, router: Router) -> Result<()> {
-        let quic_config = self.state.config.quic_config.clone()
-            .unwrap_or_else(|| {
-                let mut config = QuicTransportConfig::development();
-                config.listen_addr = SocketAddr::from((
-                    self.state.config.listen_addr.ip(),
-                    self.state.config.listen_addr.port(),
-                ));
-                config
-            });
+        let quic_config = self.state.config.quic_config.clone().unwrap_or_else(|| {
+            let mut config = QuicTransportConfig::development();
+            config.listen_addr = SocketAddr::from((
+                self.state.config.listen_addr.ip(),
+                self.state.config.listen_addr.port(),
+            ));
+            config
+        });
 
         let transport = QuicTransport::new(quic_config);
         tracing::info!("QUIC listening on {}", transport.listen_addr());
@@ -215,16 +216,15 @@ impl ProxyServer {
         tracing::info!("TCP listening on {}", tcp_transport.listen_addr());
 
         // QUIC transport
-        let quic_config = self.state.config.quic_config.clone()
-            .unwrap_or_else(|| {
-                let mut config = QuicTransportConfig::development();
-                // QUIC uses a different port by default (TCP port + 363)
-                config.listen_addr = SocketAddr::from((
-                    tcp_addr.ip(),
-                    tcp_addr.port() + 363,  // 8080 -> 8443
-                ));
-                config
-            });
+        let quic_config = self.state.config.quic_config.clone().unwrap_or_else(|| {
+            let mut config = QuicTransportConfig::development();
+            // QUIC uses a different port by default (TCP port + 363)
+            config.listen_addr = SocketAddr::from((
+                tcp_addr.ip(),
+                tcp_addr.port() + 363, // 8080 -> 8443
+            ));
+            config
+        });
         let quic_transport = QuicTransport::new(quic_config);
         tracing::info!("QUIC listening on {}", quic_transport.listen_addr());
 
@@ -283,7 +283,8 @@ async fn chat_completions_handler(
     if state.config.security_scanning {
         let content = serde_json::to_string(&payload).unwrap_or_default();
         match state.scanner.scan(&content) {
-            Ok(result) if !result.safe => {
+            Ok(result) if !result.safe && result.should_block => {
+                // Only block if both unsafe AND should_block is true
                 state.stats.record_error();
                 return (
                     StatusCode::BAD_REQUEST,
@@ -296,6 +297,13 @@ async fn chat_completions_handler(
                     })),
                 )
                     .into_response();
+            },
+            Ok(result) if !result.safe => {
+                // Unsafe but below blocking threshold - log warning but allow
+                tracing::warn!(
+                    "Security scan detected threats but below threshold: {:?}",
+                    result.threats.iter().map(|t| &t.name).collect::<Vec<_>>()
+                );
             },
             Err(e) => {
                 tracing::warn!("Security scan failed: {}", e);
@@ -448,8 +456,6 @@ async fn handle_streaming_request(
         (request_json, "application/json")
     };
 
-    let _bytes_in = body.len();
-
     // Build upstream request
     let upstream_url = format!("{}/chat/completions", state.config.upstream_url);
 
@@ -480,16 +486,44 @@ async fn handle_streaming_request(
                     .into_response();
             }
 
-            // Create streaming response
-            let _stats = Arc::new(state.stats.summary());
-            let _compress = state.config.compress_responses;
+            // Create streaming codec for response compression
+            let compress_responses = state.config.compress_responses;
+            let stats = Arc::clone(&state.stats);
+
+            // Use Arc<Mutex> for shared mutable state in the stream
+            let streaming_codec =
+                std::sync::Arc::new(std::sync::Mutex::new(if compress_responses {
+                    crate::codec::StreamingCodec::new()
+                } else {
+                    crate::codec::StreamingCodec::passthrough()
+                }));
 
             let stream = response.bytes_stream().map(move |chunk| {
                 match chunk {
                     Ok(bytes) => {
-                        // For now, pass through SSE chunks
-                        // In production, we'd compress each chunk
-                        Ok::<_, std::io::Error>(bytes)
+                        let bytes_in = bytes.len();
+
+                        // Process chunk through streaming codec
+                        let mut codec = streaming_codec.lock().unwrap();
+                        match codec.process_chunk(&bytes) {
+                            Ok(outputs) => {
+                                // Combine all output chunks
+                                let combined: Vec<u8> =
+                                    outputs.into_iter().flat_map(|b| b.to_vec()).collect();
+
+                                let bytes_out = combined.len();
+
+                                // Record streaming stats
+                                stats.record_streaming_chunk(bytes_in, bytes_out);
+
+                                Ok::<_, std::io::Error>(bytes::Bytes::from(combined))
+                            },
+                            Err(_) => {
+                                // On compression error, pass through original
+                                stats.record_streaming_chunk(bytes_in, bytes_in);
+                                Ok(bytes)
+                            },
+                        }
                     },
                     Err(e) => Err(std::io::Error::new(std::io::ErrorKind::Other, e)),
                 }

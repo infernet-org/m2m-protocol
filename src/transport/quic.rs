@@ -58,10 +58,7 @@ impl QuicTransport {
     }
 
     /// Handle a single HTTP/3 connection.
-    async fn handle_connection(
-        router: Router,
-        connection: quinn::Connection,
-    ) -> Result<()> {
+    async fn handle_connection(router: Router, connection: quinn::Connection) -> Result<()> {
         let remote_addr = connection.remote_address();
         tracing::debug!("New QUIC connection from {}", remote_addr);
 
@@ -83,15 +80,15 @@ impl QuicTransport {
                             tracing::error!("Request error: {}", e);
                         }
                     });
-                }
+                },
                 Ok(None) => {
                     tracing::debug!("Connection closed gracefully");
                     break;
-                }
+                },
                 Err(e) => {
                     tracing::warn!("Connection error: {}", e);
                     break;
-                }
+                },
             }
         }
 
@@ -114,9 +111,11 @@ impl QuicTransport {
         // Read request body if present
         let body = if method != Method::GET && method != Method::HEAD {
             let mut body_bytes = Vec::new();
-            while let Some(mut chunk) = stream.recv_data().await.map_err(|e| {
-                M2MError::Server(format!("Failed to read request body: {}", e))
-            })? {
+            while let Some(mut chunk) = stream
+                .recv_data()
+                .await
+                .map_err(|e| M2MError::Server(format!("Failed to read request body: {}", e)))?
+            {
                 // Copy bytes from Buf implementation
                 while chunk.has_remaining() {
                     let bytes = chunk.chunk();
@@ -188,10 +187,7 @@ impl QuicTransport {
 }
 
 impl Transport for QuicTransport {
-    fn serve(
-        &self,
-        router: Router,
-    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+    fn serve(&self, router: Router) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
         Box::pin(async move {
             let addr = self.config.listen_addr;
 
@@ -199,8 +195,18 @@ impl Transport for QuicTransport {
             let server_config = self.config.build_quinn_config()?;
 
             tracing::info!("QUIC transport listening on {}", addr);
-            tracing::info!("  0-RTT: {}", if self.config.enable_0rtt { "enabled" } else { "disabled" });
-            tracing::info!("  Congestion control: {}", if self.config.use_bbr { "BBR" } else { "Cubic" });
+            tracing::info!(
+                "  0-RTT: {}",
+                if self.config.enable_0rtt {
+                    "enabled"
+                } else {
+                    "disabled"
+                }
+            );
+            tracing::info!(
+                "  Congestion control: {}",
+                if self.config.use_bbr { "BBR" } else { "Cubic" }
+            );
 
             // Create QUIC endpoint
             let endpoint = quinn::Endpoint::server(server_config, addr)
@@ -218,10 +224,10 @@ impl Transport for QuicTransport {
                             if let Err(e) = Self::handle_connection(router, connection).await {
                                 tracing::error!("Connection handler error: {}", e);
                             }
-                        }
+                        },
                         Err(e) => {
                             tracing::warn!("Failed to accept connection: {}", e);
-                        }
+                        },
                     }
                 });
             }
@@ -237,19 +243,6 @@ impl Transport for QuicTransport {
     fn listen_addr(&self) -> String {
         format!("https://{}", self.config.listen_addr)
     }
-}
-
-/// Statistics for QUIC transport.
-#[derive(Debug, Clone, Default)]
-pub struct QuicStats {
-    /// Total connections accepted.
-    pub connections_accepted: u64,
-    /// Currently active connections.
-    pub active_connections: u64,
-    /// Connections using 0-RTT.
-    pub zero_rtt_connections: u64,
-    /// Connection migrations detected.
-    pub migrations: u64,
 }
 
 #[cfg(test)]

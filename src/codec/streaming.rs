@@ -14,15 +14,40 @@
 //! data: [DONE]
 //! ```
 //!
-//! # Compression Strategy
+//! # Compression Strategies
+//!
+//! Three modes are available:
+//!
+//! - **Abbreviation**: Lightweight key/value abbreviation for minimal latency
+//! - **TokenNative**: Direct token ID transmission for maximum compression
+//! - **Hybrid**: Abbreviation per-chunk, TokenNative for final accumulated content
 //!
 //! For streaming, we use lightweight token abbreviation (no Brotli) to minimize
 //! latency per chunk. Full compression can be applied to the accumulated response.
 
-use crate::codec::tables::{KEY_ABBREV, KEY_EXPAND, ROLE_ABBREV, ROLE_EXPAND};
+use super::token_native::TokenNativeCodec;
+use super::CompressionResult;
+use crate::codec::tables::{
+    KEY_ABBREV, KEY_EXPAND, MODEL_ABBREV, MODEL_EXPAND, ROLE_ABBREV, ROLE_EXPAND,
+};
 use crate::error::{M2MError, Result};
+use crate::models::Encoding;
 use bytes::Bytes;
 use serde_json::Value;
+
+/// Streaming compression mode
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StreamingMode {
+    /// Lightweight key/value abbreviation (minimal latency)
+    #[default]
+    Abbreviation,
+    /// Token ID transmission (maximum compression, higher latency)
+    TokenNative,
+    /// Abbreviation per-chunk, TokenNative for final content
+    Hybrid,
+    /// No compression (passthrough)
+    Passthrough,
+}
 
 /// SSE event types
 #[derive(Debug, Clone, PartialEq)]
@@ -51,8 +76,10 @@ pub struct StreamingCodec {
     bytes_in: usize,
     /// Total bytes after compression
     bytes_out: usize,
-    /// Whether compression is enabled
-    compress: bool,
+    /// Compression mode
+    mode: StreamingMode,
+    /// TokenNative codec (for TokenNative/Hybrid modes)
+    token_native: TokenNativeCodec,
 }
 
 impl Default for StreamingCodec {
@@ -62,23 +89,55 @@ impl Default for StreamingCodec {
 }
 
 impl StreamingCodec {
-    /// Create a new streaming codec
+    /// Create a new streaming codec with default mode (Abbreviation)
     pub fn new() -> Self {
         Self {
             accumulated_content: String::new(),
             chunks_processed: 0,
             bytes_in: 0,
             bytes_out: 0,
-            compress: true,
+            mode: StreamingMode::Abbreviation,
+            token_native: TokenNativeCodec::default(),
+        }
+    }
+
+    /// Create codec with specific mode
+    pub fn with_mode(mode: StreamingMode) -> Self {
+        Self {
+            mode,
+            ..Self::new()
+        }
+    }
+
+    /// Create codec with TokenNative mode and specific encoding
+    pub fn token_native(encoding: Encoding) -> Self {
+        Self {
+            mode: StreamingMode::TokenNative,
+            token_native: TokenNativeCodec::new(encoding),
+            ..Self::new()
+        }
+    }
+
+    /// Create codec with Hybrid mode (abbreviation + final TokenNative)
+    pub fn hybrid(encoding: Encoding) -> Self {
+        Self {
+            mode: StreamingMode::Hybrid,
+            token_native: TokenNativeCodec::new(encoding),
+            ..Self::new()
         }
     }
 
     /// Create codec with compression disabled (passthrough)
     pub fn passthrough() -> Self {
         Self {
-            compress: false,
+            mode: StreamingMode::Passthrough,
             ..Self::new()
         }
+    }
+
+    /// Get current streaming mode
+    pub fn mode(&self) -> StreamingMode {
+        self.mode
     }
 
     /// Parse an SSE line into an event
@@ -141,16 +200,26 @@ impl StreamingCodec {
                     self.accumulated_content.push_str(&content);
                 }
 
-                if self.compress {
-                    // Compress the JSON
-                    let compressed = self.compress_sse_json(&json)?;
-                    Ok(Some(Bytes::from(format!("data: {}\n\n", compressed))))
-                } else {
-                    // Passthrough
-                    Ok(Some(Bytes::from(format!(
-                        "data: {}\n\n",
-                        serde_json::to_string(&json).unwrap_or_default()
-                    ))))
+                match self.mode {
+                    StreamingMode::Passthrough => {
+                        // No compression
+                        Ok(Some(Bytes::from(format!(
+                            "data: {}\n\n",
+                            serde_json::to_string(&json).unwrap_or_default()
+                        ))))
+                    },
+                    StreamingMode::Abbreviation | StreamingMode::Hybrid => {
+                        // Lightweight key abbreviation
+                        let compressed = self.compress_sse_json(&json)?;
+                        Ok(Some(Bytes::from(format!("data: {}\n\n", compressed))))
+                    },
+                    StreamingMode::TokenNative => {
+                        // Full token-native compression per chunk
+                        let json_str = serde_json::to_string(&json)
+                            .map_err(|e| M2MError::Compression(e.to_string()))?;
+                        let result = self.token_native.compress(&json_str)?;
+                        Ok(Some(Bytes::from(format!("data: {}\n\n", result.data))))
+                    },
                 }
             },
             SseEvent::Done => Ok(Some(Bytes::from_static(b"data: [DONE]\n\n"))),
@@ -159,12 +228,16 @@ impl StreamingCodec {
         }
     }
 
-    /// Extract delta content from a streaming response
+    /// Extract delta content from a streaming response (handles both original and abbreviated keys)
     fn extract_delta_content(&self, json: &Value) -> Option<String> {
-        json.get("choices")?
+        // Handle both original ("choices") and abbreviated ("C") keys
+        json.get("choices")
+            .or_else(|| json.get("C"))?
             .get(0)?
-            .get("delta")?
-            .get("content")?
+            .get("delta")
+            .or_else(|| json.get("D"))?
+            .get("content")
+            .or_else(|| json.get("c"))?
             .as_str()
             .map(String::from)
     }
@@ -197,6 +270,17 @@ impl StreamingCodec {
                         } else {
                             new_val
                         }
+                    // Special handling for model values
+                    } else if key == "model" {
+                        if let Value::String(model) = &new_val {
+                            if let Some(abbrev) = MODEL_ABBREV.get(model.as_str()) {
+                                Value::String((*abbrev).to_string())
+                            } else {
+                                new_val
+                            }
+                        } else {
+                            new_val
+                        }
                     } else {
                         new_val
                     };
@@ -217,14 +301,38 @@ impl StreamingCodec {
         &self.accumulated_content
     }
 
+    /// Finalize streaming with TokenNative compression
+    ///
+    /// For Hybrid mode, this compresses the full accumulated content
+    /// using TokenNative for maximum compression.
+    ///
+    /// Returns the compression result with statistics.
+    pub fn finalize_token_native(&self) -> Result<CompressionResult> {
+        if self.accumulated_content.is_empty() {
+            return Err(M2MError::Compression(
+                "No content accumulated to finalize".to_string(),
+            ));
+        }
+        self.token_native.compress(&self.accumulated_content)
+    }
+
+    /// Finalize with raw bytes (no base64 overhead)
+    ///
+    /// For binary-safe channels, returns raw VarInt-encoded token IDs.
+    pub fn finalize_raw(&self) -> Vec<u8> {
+        self.token_native.compress_raw(&self.accumulated_content)
+    }
+
     /// Get compression statistics
     pub fn stats(&self) -> StreamingStats {
         StreamingStats {
             chunks_processed: self.chunks_processed,
             bytes_in: self.bytes_in,
             bytes_out: self.bytes_out,
-            compression_ratio: if self.bytes_in > 0 {
-                self.bytes_out as f64 / self.bytes_in as f64
+            // Use same semantics as CompressionResult::byte_ratio() - original/compressed
+            // Higher is better (2.0 = 50% compression)
+            compression_ratio: if self.bytes_out > 0 {
+                self.bytes_in as f64 / self.bytes_out as f64
             } else {
                 1.0
             },
@@ -250,26 +358,45 @@ pub struct StreamingStats {
     pub bytes_in: usize,
     /// Total output bytes
     pub bytes_out: usize,
-    /// Compression ratio (output/input)
+    /// Compression ratio (input/output) - higher is better (2.0 = 50% compression)
     pub compression_ratio: f64,
     /// Length of accumulated content
     pub accumulated_length: usize,
 }
 
 /// Streaming decompressor for expanding abbreviated SSE
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct StreamingDecompressor {
     /// Accumulated content
     accumulated_content: String,
+    /// TokenNative codec for decoding
+    token_native: TokenNativeCodec,
+}
+
+impl Default for StreamingDecompressor {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl StreamingDecompressor {
     /// Create a new decompressor
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            accumulated_content: String::new(),
+            token_native: TokenNativeCodec::default(),
+        }
     }
 
-    /// Decompress an SSE chunk
+    /// Create decompressor with specific encoding
+    pub fn with_encoding(encoding: Encoding) -> Self {
+        Self {
+            accumulated_content: String::new(),
+            token_native: TokenNativeCodec::new(encoding),
+        }
+    }
+
+    /// Decompress an SSE chunk (auto-detects format)
     pub fn decompress_chunk(&mut self, chunk: &[u8]) -> Result<Bytes> {
         let text = std::str::from_utf8(chunk)
             .map_err(|e| M2MError::Decompression(format!("Invalid UTF-8: {}", e)))?;
@@ -280,7 +407,20 @@ impl StreamingDecompressor {
             if let Some(data) = line.strip_prefix("data: ") {
                 if data == "[DONE]" {
                     output.push_str("data: [DONE]\n\n");
+                } else if data.starts_with("#TK|") {
+                    // TokenNative format - decompress
+                    let decompressed = self.token_native.decompress(data)?;
+                    if let Ok(json) = serde_json::from_str::<Value>(&decompressed) {
+                        // Extract content for accumulation
+                        if let Some(content) = self.extract_delta_content(&json) {
+                            self.accumulated_content.push_str(&content);
+                        }
+                        output.push_str(&format!("data: {}\n\n", decompressed));
+                    } else {
+                        output.push_str(&format!("data: {}\n\n", decompressed));
+                    }
                 } else if let Ok(json) = serde_json::from_str::<Value>(data) {
+                    // Abbreviated JSON - expand keys
                     let expanded = self.expand_keys(&json);
 
                     // Extract content for accumulation
@@ -327,6 +467,17 @@ impl StreamingDecompressor {
                         } else {
                             new_val
                         }
+                    // Special handling for model values
+                    } else if new_key == "model" {
+                        if let Value::String(model) = &new_val {
+                            if let Some(expanded) = MODEL_EXPAND.get(model.as_str()) {
+                                Value::String((*expanded).to_string())
+                            } else {
+                                new_val
+                            }
+                        } else {
+                            new_val
+                        }
                     } else {
                         new_val
                     };
@@ -340,12 +491,16 @@ impl StreamingDecompressor {
         }
     }
 
-    /// Extract delta content
+    /// Extract delta content from JSON (handles both abbreviated and expanded keys)
     fn extract_delta_content(&self, json: &Value) -> Option<String> {
-        json.get("choices")?
+        // Handle both expanded ("choices") and abbreviated ("C") keys
+        json.get("choices")
+            .or_else(|| json.get("C"))?
             .get(0)?
-            .get("delta")?
-            .get("content")?
+            .get("delta")
+            .or_else(|| json.get("D"))?
+            .get("content")
+            .or_else(|| json.get("c"))?
             .as_str()
             .map(String::from)
     }
@@ -359,6 +514,7 @@ impl StreamingDecompressor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::Encoding;
 
     #[test]
     fn test_parse_sse_data() {
@@ -399,10 +555,10 @@ mod tests {
 
         let output = std::str::from_utf8(&outputs[0]).unwrap();
         assert!(output.starts_with("data: "));
-        // Should have abbreviated keys
-        assert!(output.contains("\"I\":")); // id -> I
-        assert!(output.contains("\"C\":")); // choices -> C
-        assert!(output.contains("\"D\":")); // delta -> D
+        // Should have abbreviated keys that save tokens
+        // Note: "id" is NOT abbreviated (doesn't save tokens)
+        assert!(output.contains("\"C\":")); // choices -> C (saves 1 token)
+        assert!(output.contains("\"D\":")); // delta -> D (saves 1 token)
     }
 
     #[test]
@@ -433,21 +589,28 @@ mod tests {
         assert_eq!(stats.chunks_processed, 1);
         assert!(stats.bytes_in > 0);
         assert!(stats.bytes_out > 0);
-        assert!(stats.compression_ratio < 1.0); // Should compress
+        // Ratio is now input/output, so > 1.0 means compression occurred
+        assert!(
+            stats.compression_ratio > 1.0,
+            "Expected compression ratio > 1.0, got {}",
+            stats.compression_ratio
+        );
     }
 
     #[test]
     fn test_decompress_chunk() {
         let mut decompressor = StreamingDecompressor::new();
 
-        // Abbreviated SSE
-        let chunk = br#"data: {"I":"123","C":[{"D":{"c":"Hello"}}]}"#;
+        // Abbreviated SSE using token-saving abbreviations
+        // Note: "id" is NOT abbreviated (doesn't save tokens), use "id" directly
+        let chunk = br#"data: {"id":"123","C":[{"D":{"c":"Hello"}}]}"#;
         let output = decompressor.decompress_chunk(chunk).unwrap();
 
         let text = std::str::from_utf8(&output).unwrap();
-        assert!(text.contains("\"id\":")); // I -> id
+        assert!(text.contains("\"id\":")); // id stays as id
         assert!(text.contains("\"choices\":")); // C -> choices
         assert!(text.contains("\"delta\":")); // D -> delta
+        assert!(text.contains("\"content\":")); // c -> content
     }
 
     #[test]
@@ -494,5 +657,78 @@ mod tests {
         // Should NOT have abbreviated keys
         assert!(output.contains("\"id\":")); // Not abbreviated
         assert!(output.contains("\"choices\":")); // Not abbreviated
+    }
+
+    #[test]
+    fn test_token_native_mode() {
+        let mut codec = StreamingCodec::token_native(Encoding::Cl100kBase);
+
+        let chunk = br#"data: {"id":"123","choices":[{"delta":{"content":"Hello"}}]}"#;
+        let outputs = codec.process_chunk(chunk).unwrap();
+
+        let output = std::str::from_utf8(&outputs[0]).unwrap();
+        // Should be in TokenNative format
+        assert!(
+            output.contains("#TK|C|"),
+            "Expected TokenNative format, got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_hybrid_mode_finalize() {
+        let mut codec = StreamingCodec::hybrid(Encoding::Cl100kBase);
+
+        let chunks = vec![
+            br#"data: {"choices":[{"delta":{"content":"Hello"}}]}"#.as_slice(),
+            br#"data: {"choices":[{"delta":{"content":" world"}}]}"#.as_slice(),
+            br#"data: {"choices":[{"delta":{"content":"!"}}]}"#.as_slice(),
+        ];
+
+        for chunk in chunks {
+            codec.process_chunk(chunk).unwrap();
+        }
+
+        // Finalize with TokenNative
+        let result = codec.finalize_token_native().unwrap();
+        assert!(result.data.starts_with("#TK|"));
+
+        // Decompress and verify
+        let decompressed = TokenNativeCodec::cl100k().decompress(&result.data).unwrap();
+        assert_eq!(decompressed, "Hello world!");
+    }
+
+    #[test]
+    fn test_streaming_mode_selection() {
+        let abbrev = StreamingCodec::new();
+        assert_eq!(abbrev.mode(), StreamingMode::Abbreviation);
+
+        let native = StreamingCodec::token_native(Encoding::Cl100kBase);
+        assert_eq!(native.mode(), StreamingMode::TokenNative);
+
+        let hybrid = StreamingCodec::hybrid(Encoding::O200kBase);
+        assert_eq!(hybrid.mode(), StreamingMode::Hybrid);
+
+        let passthrough = StreamingCodec::passthrough();
+        assert_eq!(passthrough.mode(), StreamingMode::Passthrough);
+    }
+
+    #[test]
+    fn test_decompress_token_native_chunk() {
+        // First compress
+        let mut codec = StreamingCodec::token_native(Encoding::Cl100kBase);
+        let chunk = br#"data: {"id":"123","choices":[{"delta":{"content":"Test"}}]}"#;
+        let outputs = codec.process_chunk(chunk).unwrap();
+
+        // Then decompress
+        let mut decompressor = StreamingDecompressor::new();
+        let decompressed = decompressor.decompress_chunk(&outputs[0]).unwrap();
+
+        let text = std::str::from_utf8(&decompressed).unwrap();
+        assert!(
+            text.contains("\"choices\":"),
+            "Expected expanded JSON, got: {}",
+            text
+        );
     }
 }

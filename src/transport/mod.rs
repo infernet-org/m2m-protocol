@@ -62,16 +62,6 @@ pub enum TransportKind {
 }
 
 impl TransportKind {
-    /// Parse from string (for CLI/config).
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s.to_lowercase().as_str() {
-            "tcp" | "http" => Some(Self::Tcp),
-            "quic" | "http3" | "h3" => Some(Self::Quic),
-            "both" | "dual" => Some(Self::Both),
-            _ => None,
-        }
-    }
-
     /// Get descriptive name.
     pub fn name(&self) -> &'static str {
         match self {
@@ -88,6 +78,19 @@ impl std::fmt::Display for TransportKind {
     }
 }
 
+impl std::str::FromStr for TransportKind {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "tcp" | "http" => Ok(Self::Tcp),
+            "quic" | "http3" | "h3" => Ok(Self::Quic),
+            "both" | "dual" => Ok(Self::Both),
+            _ => Err(format!("Unknown transport kind: {}", s)),
+        }
+    }
+}
+
 /// Transport trait for pluggable network backends.
 ///
 /// Implementations handle the low-level network protocol while
@@ -96,10 +99,7 @@ pub trait Transport: Send + Sync {
     /// Serve the given Axum router on this transport.
     ///
     /// This method should run until shutdown is signaled.
-    fn serve(
-        &self,
-        router: Router,
-    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>>;
+    fn serve(&self, router: Router) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>>;
 
     /// Get the transport name for logging.
     fn name(&self) -> &'static str;
@@ -111,14 +111,24 @@ pub trait Transport: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::str::FromStr;
 
     #[test]
     fn test_transport_kind_from_str() {
-        assert_eq!(TransportKind::from_str("tcp"), Some(TransportKind::Tcp));
-        assert_eq!(TransportKind::from_str("quic"), Some(TransportKind::Quic));
-        assert_eq!(TransportKind::from_str("HTTP3"), Some(TransportKind::Quic));
-        assert_eq!(TransportKind::from_str("both"), Some(TransportKind::Both));
-        assert_eq!(TransportKind::from_str("invalid"), None);
+        assert_eq!(TransportKind::from_str("tcp").unwrap(), TransportKind::Tcp);
+        assert_eq!(
+            TransportKind::from_str("quic").unwrap(),
+            TransportKind::Quic
+        );
+        assert_eq!(
+            TransportKind::from_str("HTTP3").unwrap(),
+            TransportKind::Quic
+        );
+        assert_eq!(
+            TransportKind::from_str("both").unwrap(),
+            TransportKind::Both
+        );
+        assert!(TransportKind::from_str("invalid").is_err());
     }
 
     #[test]

@@ -62,6 +62,14 @@ lazy_static::lazy_static! {
     static ref PATTERN_DECODE: HashMap<u8, &'static str> = {
         PATTERN_ENCODE.iter().map(|(k, v)| (*v, *k)).collect()
     };
+
+    /// Patterns sorted by length (longest first) for deterministic matching
+    static ref PATTERNS_SORTED: Vec<(&'static str, u8)> = {
+        let mut patterns: Vec<_> = PATTERN_ENCODE.iter().map(|(k, v)| (*k, *v)).collect();
+        // Sort by length descending to match longest patterns first
+        patterns.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+        patterns
+    };
 }
 
 /// Dictionary codec using pattern matching
@@ -152,10 +160,10 @@ impl DictionaryCodec {
             let remaining = &content[i..];
             let mut matched = false;
 
-            // Try to match patterns (longest first would be better, but this is simpler)
-            for (pattern, &code) in PATTERN_ENCODE.iter() {
+            // Try to match patterns (sorted by length, longest first for determinism)
+            for (pattern, code) in PATTERNS_SORTED.iter() {
                 if remaining.starts_with(pattern) {
-                    result.push(code);
+                    result.push(*code);
                     i += pattern.len();
                     matched = true;
                     break;

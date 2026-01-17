@@ -29,11 +29,12 @@ Payload     = Compressed-JSON / Raw-Content
 
 ## 3.3 Algorithm Tags
 
-| Tag | Algorithm | Description |
-|-----|-----------|-------------|
-| `T1` | Token v1 | Semantic key/value abbreviation |
-| `BR` | Brotli | Brotli compression + Base64 |
-| `DI` | Dictionary | Pattern-based encoding |
+| Prefix | Algorithm | Description |
+|--------|-----------|-------------|
+| `#T1\|` | Token v1 | Semantic key/value abbreviation |
+| `#TK\|` | TokenNative | Direct BPE token ID transmission |
+| `#M2M[v3.0]\|DATA:` | Brotli | Brotli compression + Base64 |
+| `#M2M\|` | Dictionary | Pattern-based encoding |
 
 ### 3.3.1 Token Algorithm (`#T1|`)
 
@@ -49,27 +50,99 @@ Original:  {"model":"gpt-4o","messages":[{"role":"user","content":"Hi"}]}
 Wire:      #T1|{"M":"4o","m":[{"r":"u","c":"Hi"}]}
 ```
 
-### 3.3.2 Brotli Algorithm (`#BR|`)
+### 3.3.2 TokenNative Algorithm (`#TK|`)
 
 ```
-#BR|<base64-encoded-brotli>
+#TK|<tokenizer_id>|<base64_varint_tokens>
 ```
 
-The payload is Brotli-compressed content encoded as Base64.
+TokenNative compression transmits BPE token IDs directly instead of text, achieving ~50-60% compression. The tokenizer vocabulary serves as the compression dictionary.
+
+**Wire Format:**
+- `#TK|` - Algorithm prefix
+- `<tokenizer_id>` - Single character identifying the tokenizer
+- `|` - Separator
+- `<base64_varint_tokens>` - Base64-encoded VarInt token IDs
+
+**Tokenizer IDs:**
+
+| ID | Tokenizer | Models |
+|----|-----------|--------|
+| `C` | cl100k_base | GPT-3.5, GPT-4, GPT-4o (canonical fallback) |
+| `O` | o200k_base | GPT-4o, o1, o3 |
+| `L` | Llama BPE | Llama 3, Mistral |
+
+**Binary Format (for binary-safe channels):**
+
+For WebSocket binary frames or QUIC streams, a more compact binary format is available:
+
+```
+<tokenizer_byte><varint_tokens>
+```
+
+- Byte 0: Tokenizer ID (0=cl100k, 1=o200k, 2=llama)
+- Bytes 1+: VarInt-encoded token IDs (no Base64 overhead)
+
+**VarInt Encoding:**
+- Values 0-127: 1 byte (high bit clear)
+- Values 128-16383: 2 bytes (high bit set on first byte)
+- Values 16384+: 3+ bytes (continuation)
+
+**Example:**
+```
+Original:  {"model":"gpt-4o","messages":[{"role":"user","content":"Hello"}]}
+Wire:      #TK|C|W3sib... (base64-encoded token IDs)
+```
+
+**Compression Ratios:**
+
+| Content Type | Text Size | Wire Size | Compression |
+|--------------|-----------|-----------|-------------|
+| Small JSON   | 200 bytes | 80 bytes  | 60%         |
+| Medium JSON  | 1KB       | 450 bytes | 55%         |
+| Large JSON   | 10KB      | 4.5KB     | 55%         |
+
+TokenNative is optimal for small-to-medium LLM API payloads (<1KB) where token efficiency matters more than maximum byte compression.
+
+### 3.3.3 Brotli Algorithm (`#M2M[v3.0]|DATA:`)
+
+```
+#M2M[v3.0]|DATA:<base64-encoded-brotli>
+```
+
+The payload is Brotli-compressed content encoded as Base64. The version tag (`v3.0`) indicates protocol version.
 
 **Example:**
 ```
 Original:  {"model":"gpt-4o","messages":[...large content...]}
-Wire:      #BR|G6kEABwHcNP2Yk9N...
+Wire:      #M2M[v3.0]|DATA:G6kEABwHcNP2Yk9N...
 ```
 
-### 3.3.3 Dictionary Algorithm (`#DI|`)
+### 3.3.4 Dictionary Algorithm (`#M2M|`)
 
 ```
-#DI|<pattern-encoded>
+#M2M|<pattern-encoded>
 ```
 
 Reserved for pattern-based dictionary encoding. See [04-compression.md](04-compression.md).
+
+### 3.3.5 Deprecated Formats
+
+#### Zlib Algorithm (`#M2M[v2.0]|DATA:`) - DEPRECATED
+
+```
+#M2M[v2.0]|DATA:<base64-encoded-zlib>
+```
+
+The Zlib algorithm was used in M2M Protocol v2.0 but is **deprecated** in v3.0.
+
+Implementations:
+- MUST NOT generate new messages with the v2.0 format
+- SHOULD detect v2.0 format for backwards compatibility
+- MAY attempt to decompress v2.0 messages using Brotli as a fallback
+- SHOULD log a warning when v2.0 format is encountered
+
+**Migration**: All new implementations should use Brotli (`#M2M[v3.0]|DATA:`) for large content compression.
 
 ## 3.4 Encoding Rules
 
@@ -118,14 +191,15 @@ Implementations:
 ```abnf
 ; M2M Protocol Wire Format Grammar (RFC 5234)
 
-m2m-message    = prefix PIPE payload
-prefix         = "#" algorithm-tag
-algorithm-tag  = token-tag / brotli-tag / dict-tag
-token-tag      = "T1"
-brotli-tag     = "BR"
-dict-tag       = "DI"
+m2m-message    = token-message / token-native-message / brotli-message / dict-message
+token-message  = "#T1" PIPE payload
+token-native-message = "#TK" PIPE tokenizer-id PIPE base64-data
+brotli-message = "#M2M[v3.0]" PIPE "DATA:" base64-data
+dict-message   = "#M2M" PIPE payload
 
 PIPE           = %x7C                    ; |
+tokenizer-id   = "C" / "O" / "L"         ; cl100k / o200k / llama
+base64-data    = *( ALPHA / DIGIT / "+" / "/" / "=" )
 
 payload        = json-value
 json-value     = json-object / json-array / json-string /
@@ -163,7 +237,8 @@ Protocol version is NOT embedded in every message. Version negotiation occurs du
 
 For stateless mode, the algorithm tag implies version:
 - `T1` = Token compression v1.0
-- Future versions may use `T2`, `T3`, etc.
+- `TK` = TokenNative compression v1.0
+- Future versions may use `T2`, `TK2`, etc.
 
 ## 3.9 Examples
 

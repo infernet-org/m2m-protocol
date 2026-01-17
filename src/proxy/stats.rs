@@ -213,21 +213,34 @@ impl ProxyStats {
     }
 }
 
-/// Statistics summary for serialization
+/// Statistics summary for serialization.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct StatsSummary {
+    /// Total number of requests processed.
     pub total_requests: u64,
+    /// Number of streaming requests.
     pub streaming_requests: u64,
+    /// Total number of errors encountered.
     pub total_errors: u64,
+    /// Total bytes received.
     pub bytes_in: u64,
+    /// Total bytes sent (after compression).
     pub bytes_out: u64,
+    /// Total bytes saved by compression.
     pub bytes_saved: u64,
+    /// Overall compression ratio.
     pub compression_ratio: f64,
+    /// Percentage of bytes saved.
     pub savings_percent: f64,
+    /// 50th percentile latency in milliseconds.
     pub p50_latency_ms: Option<f64>,
+    /// 95th percentile latency in milliseconds.
     pub p95_latency_ms: Option<f64>,
+    /// 99th percentile latency in milliseconds.
     pub p99_latency_ms: Option<f64>,
+    /// Server uptime in seconds.
     pub uptime_secs: u64,
+    /// Average requests per second.
     pub requests_per_second: f64,
 }
 

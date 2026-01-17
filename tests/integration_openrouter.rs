@@ -17,6 +17,48 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+/// Helper function to verify semantic equivalence after compression/decompression.
+///
+/// Per spec 5.3.5, decompression MUST restore omitted default parameters.
+/// This means decompressed output may have MORE fields than the original.
+/// We verify that:
+/// 1. All original fields are present in decompressed output
+/// 2. Original values are preserved
+fn verify_semantic_equivalence(
+    original: &serde_json::Value,
+    decompressed: &serde_json::Value,
+    algo: &Algorithm,
+) {
+    match (original, decompressed) {
+        (serde_json::Value::Object(orig_map), serde_json::Value::Object(dec_map)) => {
+            // All original keys must be present in decompressed
+            for (key, orig_val) in orig_map {
+                let dec_val = dec_map.get(key).unwrap_or_else(|| {
+                    panic!("{:?}: Missing key '{}' in decompressed output", algo, key);
+                });
+
+                // Values must match (recursively)
+                verify_semantic_equivalence(orig_val, dec_val, algo);
+            }
+        },
+        (serde_json::Value::Array(orig_arr), serde_json::Value::Array(dec_arr)) => {
+            assert_eq!(
+                orig_arr.len(),
+                dec_arr.len(),
+                "{:?}: Array length mismatch",
+                algo
+            );
+            for (orig_val, dec_val) in orig_arr.iter().zip(dec_arr.iter()) {
+                verify_semantic_equivalence(orig_val, dec_val, algo);
+            }
+        },
+        _ => {
+            // For primitives, values must match exactly
+            assert_eq!(original, decompressed, "{:?}: Value mismatch", algo);
+        },
+    }
+}
+
 /// OpenRouter API configuration
 const OPENROUTER_API_URL: &str = "https://openrouter.ai/api/v1/chat/completions";
 
@@ -280,8 +322,30 @@ async fn test_compression_algorithms() {
                     let decompress_time = start.elapsed().as_secs_f64() * 1000.0;
 
                     match decompressed {
-                        Ok(original) => {
-                            assert_eq!(original, content, "Decompression mismatch for {:?}", algo);
+                        Ok(decompressed_str) => {
+                            // Parse both as JSON for semantic comparison
+                            let original_json: serde_json::Value =
+                                serde_json::from_str(&content).unwrap();
+                            let decompressed_json: serde_json::Value =
+                                serde_json::from_str(&decompressed_str).unwrap();
+
+                            // For None algorithm, expect exact byte-for-byte match
+                            if *algo == Algorithm::None {
+                                assert_eq!(
+                                    decompressed_str, content,
+                                    "None algorithm should be passthrough"
+                                );
+                            } else {
+                                // For compression algorithms, verify:
+                                // 1. All original fields are preserved
+                                // 2. Decompressed may have additional restored defaults
+                                verify_semantic_equivalence(
+                                    &original_json,
+                                    &decompressed_json,
+                                    algo,
+                                );
+                            }
+
                             println!(
                                 "  {:?}: {} → {} bytes ({:.1}%), saved {} bytes, compress: {:.2}ms, decompress: {:.2}ms ✓",
                                 algo,
@@ -470,7 +534,7 @@ async fn test_security_scanner() {
 
 /// End-to-end test with real OpenRouter inference
 #[tokio::test]
-#[ignore] // Run with: cargo test test_e2e_openrouter -- --ignored --nocapture
+#[ignore = "requires OPENROUTER_API_KEY - run with: cargo test test_e2e_openrouter -- --ignored"]
 async fn test_e2e_openrouter() {
     println!("\n=== End-to-End OpenRouter Integration Test ===\n");
 
@@ -567,8 +631,14 @@ async fn test_e2e_openrouter() {
         .expect("Decompression failed");
     let decompress_time = start.elapsed().as_secs_f64() * 1000.0;
 
-    assert_eq!(decompressed, request_json, "Decompression mismatch!");
-    println!("✓ Decompressed in {:.2}ms", decompress_time);
+    // Compare semantically - decompressed may have restored default values
+    let original_json: serde_json::Value = serde_json::from_str(&request_json).unwrap();
+    let decompressed_json: serde_json::Value = serde_json::from_str(&decompressed).unwrap();
+    verify_semantic_equivalence(&original_json, &decompressed_json, &Algorithm::Token);
+    println!(
+        "✓ Decompressed in {:.2}ms (semantic match)",
+        decompress_time
+    );
 
     // Parse and send to OpenRouter
     let request: ChatCompletionRequest = serde_json::from_str(&decompressed).unwrap();
@@ -642,7 +712,7 @@ async fn test_e2e_openrouter() {
 
 /// Test two-agent conversation with M2M protocol
 #[tokio::test]
-#[ignore] // Run with: cargo test test_two_agent_conversation -- --ignored --nocapture
+#[ignore = "requires OPENROUTER_API_KEY - run with: cargo test test_two_agent_conversation -- --ignored"]
 async fn test_two_agent_conversation() {
     println!("\n=== Two-Agent M2M Conversation Test ===\n");
 
@@ -871,7 +941,7 @@ async fn test_documented_compression_ratios() {
 
 /// Test Llama Guard on various content types
 #[tokio::test]
-#[ignore] // Run with: cargo test test_llama_guard_validation -- --ignored --nocapture
+#[ignore = "requires OPENROUTER_API_KEY - run with: cargo test test_llama_guard_validation -- --ignored"]
 async fn test_llama_guard_validation() {
     println!("\n=== Llama Guard 4 Validation Test ===\n");
 

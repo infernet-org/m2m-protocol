@@ -178,6 +178,7 @@ pub mod protocol;
 pub mod proxy;
 pub mod security;
 pub mod server;
+pub mod tokenizer;
 pub mod transport;
 
 // Re-exports for convenience
@@ -190,6 +191,9 @@ pub use protocol::{Capabilities, Message, Session, SessionState};
 pub use proxy::{ProxyConfig, ProxyServer, ProxyStats};
 pub use security::{ScanResult, SecurityScanner};
 pub use server::{AppState, ServerConfig};
+pub use tokenizer::{
+    count_tokens, count_tokens_for_model, count_tokens_with_encoding, TokenCounter,
+};
 pub use transport::{QuicTransport, QuicTransportConfig, TcpTransport, Transport, TransportKind};
 
 /// Library version

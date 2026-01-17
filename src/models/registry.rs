@@ -295,10 +295,37 @@ pub struct OpenRouterPricing {
     pub completion: Option<String>,
 }
 
+/// Response from OpenRouter /models API
+///
+/// Used for dynamic model registry updates. This struct is prepared for
+/// future `fetch_openrouter_models` implementation (requires `reqwest` feature).
+/// The struct and methods are intentionally public for API consumers who
+/// want to implement their own fetching logic.
 #[derive(Debug, serde::Deserialize)]
-#[allow(dead_code)]
 pub struct OpenRouterModelsResponse {
+    /// List of available models
     pub data: Vec<OpenRouterModel>,
+}
+
+// Note: These methods are intentionally public for API consumers implementing
+// their own OpenRouter model fetching. Clippy flags them as dead code because
+// the built-in fetch function isn't implemented yet.
+#[allow(dead_code)]
+impl OpenRouterModelsResponse {
+    /// Get the list of models
+    pub fn models(&self) -> &[OpenRouterModel] {
+        &self.data
+    }
+
+    /// Get the number of models
+    pub fn len(&self) -> usize {
+        self.data.len()
+    }
+
+    /// Check if empty
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
 }
 
 impl ModelCard {
@@ -449,5 +476,59 @@ mod tests {
         // Clear dynamic
         registry.clear_dynamic().unwrap();
         assert_eq!(registry.dynamic_count(), 0);
+    }
+
+    #[test]
+    fn test_openrouter_response_parsing() {
+        // Test that OpenRouterModelsResponse can deserialize API responses
+        let json = r#"{
+            "data": [
+                {
+                    "id": "openai/gpt-4o",
+                    "name": "GPT-4o",
+                    "context_length": 128000,
+                    "pricing": {
+                        "prompt": "0.000005",
+                        "completion": "0.000015"
+                    }
+                },
+                {
+                    "id": "anthropic/claude-3-opus",
+                    "name": "Claude 3 Opus",
+                    "context_length": 200000
+                }
+            ]
+        }"#;
+
+        let response: OpenRouterModelsResponse = serde_json::from_str(json).unwrap();
+        // Test the accessor methods
+        assert_eq!(response.len(), 2);
+        assert!(!response.is_empty());
+
+        let models = response.models();
+        assert_eq!(models[0].id, "openai/gpt-4o");
+        assert_eq!(models[0].context_length, Some(128000));
+        assert!(models[0].pricing.is_some());
+        assert_eq!(models[1].id, "anthropic/claude-3-opus");
+        assert!(models[1].pricing.is_none());
+    }
+
+    #[test]
+    fn test_model_card_from_openrouter() {
+        let model = OpenRouterModel {
+            id: "openai/gpt-4o-test".to_string(),
+            name: Some("GPT-4o Test".to_string()),
+            context_length: Some(128000),
+            pricing: Some(OpenRouterPricing {
+                prompt: Some("0.000005".to_string()),
+                completion: Some("0.000015".to_string()),
+            }),
+        };
+
+        let card = ModelCard::from_openrouter(model);
+        assert_eq!(card.id, "openai/gpt-4o-test");
+        assert_eq!(card.provider, Provider::OpenAI);
+        assert_eq!(card.context_length, 128000);
+        assert!(card.pricing.is_some());
     }
 }

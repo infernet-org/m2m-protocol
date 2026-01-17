@@ -2,84 +2,99 @@
 
 use thiserror::Error;
 
-/// M2M Protocol errors
+/// M2M Protocol errors.
 #[derive(Error, Debug)]
 pub enum M2MError {
-    // === Codec Errors ===
+    /// Compression operation failed.
     #[error("Compression error: {0}")]
     Compression(String),
 
+    /// Decompression operation failed.
     #[error("Decompression error: {0}")]
     Decompression(String),
 
+    /// Invalid or unsupported codec.
     #[error("Invalid codec: {0}")]
     InvalidCodec(String),
 
-    // === Protocol Errors ===
+    /// Protocol-level error.
     #[error("Protocol error: {0}")]
     Protocol(String),
 
+    /// Capability negotiation failed.
     #[error("Negotiation failed: {0}")]
     NegotiationFailed(String),
 
+    /// Operation requires an established session.
     #[error("Session not established")]
     SessionNotEstablished,
 
+    /// Session has timed out.
     #[error("Session expired")]
     SessionExpired,
 
+    /// Invalid message format.
     #[error("Invalid message format: {0}")]
     InvalidMessage(String),
 
+    /// Capability mismatch between peers.
     #[error("Capability mismatch: {0}")]
     CapabilityMismatch(String),
 
-    // === Inference Errors ===
+    /// ML model not loaded.
     #[error("Model not loaded: {0}")]
     ModelNotLoaded(String),
 
+    /// ML inference error.
     #[error("Inference error: {0}")]
     Inference(String),
 
+    /// Failed to load ML model.
     #[error("Model load error: {0}")]
     ModelLoad(String),
 
-    // === Security Errors ===
+    /// Security threat detected in content.
     #[error("Security threat detected: {threat_type}")]
     SecurityThreat {
+        /// Type of threat detected.
         threat_type: String,
+        /// Confidence score (0.0-1.0).
         confidence: f32,
     },
 
+    /// Content blocked by security policy.
     #[error("Content blocked: {0}")]
     ContentBlocked(String),
 
-    // === Network Errors ===
+    /// Network communication error.
     #[error("Network error: {0}")]
     Network(String),
 
+    /// Upstream service error.
     #[error("Upstream error: {0}")]
     Upstream(String),
 
-    // === Server Errors ===
+    /// Server-side error.
     #[error("Server error: {0}")]
     Server(String),
 
-    // === Configuration Errors ===
+    /// Configuration error.
     #[error("Config error: {0}")]
     Config(String),
 
+    /// Model not found in registry.
     #[error("Model not found: {0}")]
     ModelNotFound(String),
 
-    // === Tokenizer Errors ===
+    /// Tokenizer error.
     #[error("Tokenizer error: {0}")]
     Tokenizer(String),
 
-    // === Standard Errors ===
+    /// JSON serialization/deserialization error.
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
 
+    /// I/O error.
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 }

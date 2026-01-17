@@ -12,9 +12,25 @@ pub enum Algorithm {
     /// Token-optimized compression (key/value abbreviation)
     #[default]
     Token,
+    /// Token-native compression (transmit token IDs directly)
+    ///
+    /// This algorithm tokenizes content using the negotiated tokenizer and
+    /// transmits token IDs with VarInt encoding. Achieves 50-60% compression
+    /// by leveraging the tokenizer as the compression dictionary.
+    ///
+    /// Wire format: `#TK|<tokenizer_id>|<varint_encoded_tokens>`
+    TokenNative,
     /// Brotli compression (high ratio, base64 encoded)
     Brotli,
-    /// Zlib/deflate compression
+    /// Zlib/deflate compression (DEPRECATED in v3.0)
+    ///
+    /// This algorithm is kept for backwards compatibility with v2.0 wire format.
+    /// New implementations MUST NOT use Zlib for compression.
+    /// Decompression attempts will fall back to Brotli.
+    #[deprecated(
+        since = "3.0.0",
+        note = "Use Brotli instead. Kept for v2.0 wire format compatibility."
+    )]
     Zlib,
     /// Dictionary-based encoding
     Dictionary,
@@ -22,10 +38,12 @@ pub enum Algorithm {
 
 impl Algorithm {
     /// Get the wire format prefix for this algorithm
+    #[allow(deprecated)]
     pub fn prefix(&self) -> &'static str {
         match self {
             Algorithm::None => "",
             Algorithm::Token => "#T1|",
+            Algorithm::TokenNative => "#TK|",
             Algorithm::Brotli => "#M2M[v3.0]|DATA:",
             Algorithm::Zlib => "#M2M[v2.0]|DATA:",
             Algorithm::Dictionary => "#M2M|",
@@ -33,8 +51,14 @@ impl Algorithm {
     }
 
     /// Parse algorithm from wire format
+    ///
+    /// Note: v2.0 format (Zlib) is detected for backwards compatibility
+    /// but decompression will fall back to Brotli.
+    #[allow(deprecated)]
     pub fn from_prefix(content: &str) -> Option<Self> {
-        if content.starts_with("#T1|") {
+        if content.starts_with("#TK|") {
+            Some(Algorithm::TokenNative)
+        } else if content.starts_with("#T1|") {
             Some(Algorithm::Token)
         } else if content.starts_with("#M2M[v3.0]|") {
             Some(Algorithm::Brotli)
@@ -48,19 +72,37 @@ impl Algorithm {
     }
 
     /// Get human-readable name
+    #[allow(deprecated)]
     pub fn name(&self) -> &'static str {
         match self {
             Algorithm::None => "NONE",
             Algorithm::Token => "TOKEN",
+            Algorithm::TokenNative => "TOKEN_NATIVE",
             Algorithm::Brotli => "BROTLI",
-            Algorithm::Zlib => "ZLIB",
+            Algorithm::Zlib => "ZLIB (DEPRECATED)",
             Algorithm::Dictionary => "DICTIONARY",
         }
     }
 
     /// Get all available algorithms in preference order
+    ///
+    /// Note: Zlib is excluded as it is deprecated in v3.0.
+    /// Use [`Algorithm::all_including_deprecated`] if you need to include it.
     pub fn all() -> &'static [Algorithm] {
         &[
+            Algorithm::TokenNative,
+            Algorithm::Token,
+            Algorithm::Brotli,
+            Algorithm::Dictionary,
+            Algorithm::None,
+        ]
+    }
+
+    /// Get all algorithms including deprecated ones
+    #[allow(deprecated)]
+    pub fn all_including_deprecated() -> &'static [Algorithm] {
+        &[
+            Algorithm::TokenNative,
             Algorithm::Token,
             Algorithm::Brotli,
             Algorithm::Zlib,

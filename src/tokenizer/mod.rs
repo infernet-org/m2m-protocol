@@ -26,4 +26,7 @@
 
 mod counter;
 
-pub use counter::{count_tokens, count_tokens_for_model, count_tokens_with_encoding, TokenCounter};
+pub use counter::{
+    count_tokens, count_tokens_for_model, count_tokens_with_encoding, estimate_savings,
+    TokenCounter,
+};

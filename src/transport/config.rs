@@ -85,21 +85,32 @@ impl CertConfig {
                     M2MError::Config(format!("Failed to generate self-signed cert: {}", e))
                 })?;
 
-                let cert_der = rustls::Certificate(
-                    cert.serialize_der()
-                        .map_err(|e| M2MError::Config(format!("Failed to serialize cert: {}", e)))?,
-                );
+                let cert_der =
+                    rustls::Certificate(cert.serialize_der().map_err(|e| {
+                        M2MError::Config(format!("Failed to serialize cert: {}", e))
+                    })?);
                 let key_der = rustls::PrivateKey(cert.serialize_private_key_der());
 
                 Ok((vec![cert_der], key_der))
-            }
-            Self::Files { cert_path, key_path } => {
+            },
+            Self::Files {
+                cert_path,
+                key_path,
+            } => {
                 let cert_pem = fs::read(cert_path).map_err(|e| {
-                    M2MError::Config(format!("Failed to read cert file {:?}: {}", cert_path, e))
+                    M2MError::Config(format!(
+                        "Failed to read cert file {}: {}",
+                        cert_path.display(),
+                        e
+                    ))
                 })?;
 
                 let key_pem = fs::read(key_path).map_err(|e| {
-                    M2MError::Config(format!("Failed to read key file {:?}: {}", key_path, e))
+                    M2MError::Config(format!(
+                        "Failed to read key file {}: {}",
+                        key_path.display(),
+                        e
+                    ))
                 })?;
 
                 let certs: Vec<rustls::Certificate> =
@@ -133,7 +144,7 @@ impl CertConfig {
                     })?;
 
                 Ok((certs, key))
-            }
+            },
             Self::Raw { cert_der, key_der } => {
                 let certs = cert_der
                     .iter()
@@ -141,7 +152,7 @@ impl CertConfig {
                     .collect();
                 let key = rustls::PrivateKey(key_der.clone());
                 Ok((certs, key))
-            }
+            },
         }
     }
 }
@@ -151,7 +162,7 @@ impl CertConfig {
 pub struct TlsConfig {
     /// Certificate source.
     pub cert: CertConfig,
-    /// ALPN protocols to advertise (e.g., ["h3", "h2"]).
+    /// ALPN protocols to advertise (e.g., `["h3", "h2"]`).
     pub alpn_protocols: Vec<Vec<u8>>,
 }
 
@@ -273,9 +284,8 @@ impl QuicTransportConfig {
 
         // Enable BBR congestion control for better throughput
         if self.use_bbr {
-            transport_config.congestion_controller_factory(Arc::new(
-                quinn::congestion::BbrConfig::default(),
-            ));
+            transport_config
+                .congestion_controller_factory(Arc::new(quinn::congestion::BbrConfig::default()));
         }
 
         let mut server_config = quinn::ServerConfig::with_crypto(Arc::new(rustls_config));

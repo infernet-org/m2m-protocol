@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use crate::error::Result;
 
 /// Simple character-level tokenizer with basic BPE merges
+#[derive(Clone)]
 pub struct SimpleTokenizer {
     /// Vocabulary mapping (token -> id)
     vocab: HashMap<String, u32>,
@@ -215,6 +216,11 @@ impl SimpleTokenizer {
     pub fn estimate_tokens(&self, text: &str) -> usize {
         // Rough estimate: ~4 chars per token for English
         text.len() / 4 + 2 // +2 for BOS/EOS
+    }
+
+    /// Count tokens in text (actual tokenization)
+    pub fn count_tokens(&self, text: &str) -> usize {
+        self.encode(text).len()
     }
 }
 

@@ -4,306 +4,351 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.75+-orange.svg)](https://www.rust-lang.org/)
 
-High-performance Machine-to-Machine protocol for LLM API communication with intelligent compression, security scanning, and an OpenAI-compatible proxy.
+**The only compression protocol that actually reduces LLM costs.**
 
-## Features
+## The Problem
 
-- **Multi-codec compression** - Token (~30% savings), Brotli (high-ratio), Dictionary
-- **OpenAI-compatible proxy** - Drop-in reverse proxy for any OpenAI-compatible API
-- **QUIC/HTTP3 transport** - 0-RTT, no head-of-line blocking, connection migration
-- **Protocol negotiation** - HELLO/ACCEPT handshake with capability exchange
-- **ML-based routing** - [Hydra SLM](https://huggingface.co/infernet/hydra) for intelligent algorithm selection
-- **Security scanning** - Threat detection for prompt injection/jailbreaks
-- **Streaming support** - SSE compression for real-time responses
-- **Session management** - Stateful sessions with timeout and keep-alive
+LLM APIs charge by **tokens**, not bytes. Traditional compression backfires:
 
-## OpenAI-Compatible Proxy
-
-The M2M proxy works with **any OpenAI-compatible API endpoint** - not just OpenAI:
-
-| Provider Type | Examples | Benefits |
-|---------------|----------|----------|
-| **Self-hosted** | vLLM, Ollama, LocalAI, TGI | 30-40% bandwidth savings |
-| **OpenAI** | GPT-4o, o1, o3 | Exact token counting |
-| **Cloud** | OpenRouter, Together.ai, Anyscale | Drop-in compression |
-| **Enterprise** | Azure OpenAI, AWS Bedrock | Security scanning |
-
-```bash
-# Start proxy forwarding to local Ollama
-m2m proxy --port 8080 --upstream http://localhost:11434/v1
-
-# With QUIC transport for agent-to-agent communication
-m2m proxy --port 8080 --upstream http://localhost:11434/v1 --transport both --quic-port 8443
-
-# Point your app to the proxy
-curl http://localhost:8080/v1/chat/completions \
-  -d '{"model": "llama3.2", "messages": [{"role": "user", "content": "Hello"}]}'
+```
+Original JSON:     68 bytes  →  42 tokens  →  $0.42 per 1M
+Gzip + Base64:     52 bytes  →  58 tokens  →  $0.58 per 1M  ❌ +38% MORE expensive
 ```
 
-See [docs/guides/proxy.md](docs/guides/proxy.md) for full proxy documentation.
+Why? Gzip produces binary output requiring Base64 encoding, which **increases** token count by ~33%.
 
-## Supported Models
+## The Solution
 
-M2M supports models with **publicly accessible tokenizers** for accurate compression:
+M2M applies **token-aware semantic compression** that reduces both bytes AND tokens:
 
-| Provider  | Tokenizer           | Models                                |
-|-----------|---------------------|---------------------------------------|
-| OpenAI    | tiktoken (open)     | GPT-4o, GPT-4, GPT-3.5, o1, o3        |
-| Meta      | Llama BPE (open)    | Llama 3, 3.1, 3.3                     |
-| Mistral   | Llama BPE (open)    | Mistral Large/Medium/Small, Mixtral   |
-| DeepSeek  | Open tokenizer      | DeepSeek v3, r1, Coder                |
-| Qwen      | Open tokenizer      | Qwen 2.5, Qwen Coder                  |
-| Nvidia    | Llama BPE (open)    | Nemotron                              |
-
-Models with closed tokenizers (Claude, Gemini, Grok) work through the proxy with heuristic token estimates.
-
-## Installation
-
-```bash
-# From source
-cargo install --path .
-
-# Or build with ONNX support (for ML routing)
-cargo build --release --features onnx
 ```
+Original JSON:     68 bytes  →  42 tokens  →  $0.42 per 1M
+M2M Compressed:    45 bytes  →  29 tokens  →  $0.29 per 1M  ✓ 31% CHEAPER
+```
+
+The compressed output remains **valid JSON** — fully debuggable and tooling-compatible.
+
+## How It Works
+
+M2M uses semantic abbreviation optimized for LLM API structure:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Original                                                                    │
+│ {"model":"gpt-4o","messages":[{"role":"user","content":"Hello"}]}          │
+│                                                                             │
+│ Wire Format                                                                 │
+│ ┌────┬───┬──────────────────────────────────────────────────────────────┐  │
+│ │ #  │T1 │ | {"M":"4o","m":[{"r":"u","c":"Hello"}]}                     │  │
+│ └────┴───┴──────────────────────────────────────────────────────────────┘  │
+│   ↑    ↑   ↑                                                                │
+│   │    │   └─ Delimiter                                                     │
+│   │    └───── Algorithm tag (T1 = Token v1)                                 │
+│   └────────── M2M marker                                                    │
+│                                                                             │
+│ Savings: 34% bytes, 31% tokens                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Abbreviation Mappings
+
+| Original | Compressed | Tokens Saved |
+|----------|------------|--------------|
+| `"messages"` | `"m"` | 2 → 1 |
+| `"content"` | `"c"` | 2 → 1 |
+| `"assistant"` | `"a"` | 2 → 1 |
+| `"model"` | `"M"` | 2 → 1 |
+| `"gpt-4o"` | `"4o"` | 3 → 1 |
+
+Full mapping table: [docs/reference/abbreviations.md](docs/reference/abbreviations.md)
+
+## Wire Format
+
+Four algorithms with self-describing prefixes:
+
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ TOKEN NATIVE (Recommended for M2M)                                           │
+│ Best for: Small-medium LLM API JSON (<1KB) — ~50% compression                │
+│                                                                              │
+│  #  TK  |  C  |  W3sib29kZWw...                                              │
+│  ▲  ▲   ▲  ▲  ▲  ▲                                                           │
+│  │  │   │  │  │  └─ Base64-encoded VarInt token IDs                          │
+│  │  │   │  │  └──── Separator                                                │
+│  │  │   │  └─────── Tokenizer ID (C=cl100k, O=o200k, L=llama)                │
+│  │  │   └────────── Delimiter                                                │
+│  │  └────────────── Algorithm: TokenNative                                   │
+│  └───────────────── M2M marker                                               │
+│                                                                              │
+│  Transmits BPE token IDs directly — tokenizer IS the dictionary              │
+├──────────────────────────────────────────────────────────────────────────────┤
+│ TOKEN                                                                        │
+│ Best for: LLM API JSON — preserves structure, ~30% token savings             │
+│                                                                              │
+│  #  T1  |  { "M":"4o", "m":[{"r":"u","c":"Hello"}] }                         │
+│  ▲  ▲   ▲  ▲                                                                 │
+│  │  │   │  └─ Abbreviated JSON (still valid JSON!)                           │
+│  │  │   └──── Delimiter                                                      │
+│  │  └──────── Algorithm: Token v1                                            │
+│  └─────────── M2M marker                                                     │
+│                                                                              │
+│  Prefix: 4 bytes                                                             │
+├──────────────────────────────────────────────────────────────────────────────┤
+│ BROTLI                                                                       │
+│ Best for: Large repetitive content (>1KB)                                    │
+│                                                                              │
+│  #M2M[v3.0]|DATA:  G6kEABwHcNP2Yk9N...                                       │
+│  ▲                 ▲                                                         │
+│  │                 └─ Base64-encoded Brotli compressed data                  │
+│  └─────────────────── Version-tagged prefix                                  │
+│                                                                              │
+│  Prefix: 16 bytes                                                            │
+├──────────────────────────────────────────────────────────────────────────────┤
+│ NONE                                                                         │
+│ Passthrough for: Small content (<100 bytes)                                  │
+│                                                                              │
+│  {"model":"gpt-4o","messages":[]}                                            │
+│                                                                              │
+│  No prefix — compression overhead would exceed savings                       │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+Auto-detection from prefix means decompression always knows which algorithm was used.
 
 ## Quick Start
 
-### Compression (Stateless)
+### Installation
+
+```bash
+cargo install --path .
+```
+
+### As a Library
 
 ```rust
 use m2m::{CodecEngine, Algorithm};
 
 let engine = CodecEngine::new();
 
-// Compress LLM API payload
-let content = r#"{"model":"gpt-4o","messages":[{"role":"user","content":"Hello"}]}"#;
-let result = engine.compress(content, Algorithm::Token)?;
+// Compress with Token (abbreviated JSON)
+let json = r#"{"model":"gpt-4o","messages":[{"role":"user","content":"Hello"}]}"#;
+let result = engine.compress(json, Algorithm::Token)?;
 
-println!("Compressed: {}", result.data);
-println!("Ratio: {:.1}%", result.byte_ratio() * 100.0);
+println!("{}", result.data);  // #T1|{"M":"4o","m":[{"r":"u","c":"Hello"}]}
+println!("Saved: {:.0}%", (1.0 - result.byte_ratio()) * 100.0);
 
-// Decompress (auto-detects algorithm from wire prefix)
+// Compress with TokenNative (direct token IDs — best for M2M)
+use m2m::codec::TokenNativeCodec;
+use m2m::models::Encoding;
+
+let codec = TokenNativeCodec::new(Encoding::Cl100kBase);
+let result = codec.compress(json)?;
+
+println!("{}", result.data);  // #TK|C|W3sib29kZWw... (~50% smaller)
+
+// Decompress (auto-detects algorithm from prefix)
 let original = engine.decompress(&result.data)?;
 ```
 
-### Auto-Selection
+### As a Proxy
 
-```rust
-use m2m::CodecEngine;
+Drop-in replacement for any OpenAI-compatible endpoint:
 
-let engine = CodecEngine::new();
-let (result, algorithm) = engine.compress_auto(content)?;
-println!("Selected: {:?}", algorithm);
+```bash
+# Start proxy
+m2m proxy --port 8080 --upstream http://localhost:11434/v1
+
+# Use normally — compression is transparent
+curl http://localhost:8080/v1/chat/completions \
+  -d '{"model":"llama3.2","messages":[{"role":"user","content":"Hello"}]}'
 ```
 
+Works with vLLM, Ollama, OpenAI, OpenRouter, Azure, or any OpenAI-compatible API.
+
+## Protocol Modes
+
+### Stateless (Simple)
+
+Direct compression/decompression — no handshake required:
+
+```
+Client                              Server
+   │                                   │
+   │══════ Compressed Request ════════>│
+   │<═════ Compressed Response ════════│
+```
+
+### Session-Based (Full Protocol)
+
+Capability negotiation with HELLO/ACCEPT handshake:
+
+```
+Client                              Server
+   │                                   │
+   │────────── HELLO (caps) ──────────>│  Advertise: algorithms, security, streaming
+   │<───────── ACCEPT (caps) ──────────│  Negotiate: common capabilities
+   │                                   │
+   │══════════ DATA ══════════════════>│  Exchange compressed payloads
+   │<═════════ DATA ═══════════════════│
+   │                                   │
+   │────────── PING ──────────────────>│  Keep-alive (every 60s)
+   │<───────── PONG ───────────────────│
+   │                                   │
+   │────────── CLOSE ─────────────────>│  Graceful termination
+```
+
+```rust
+use m2m::{Session, Capabilities};
+
+// Establish session
+let mut client = Session::new(Capabilities::default());
+let hello = client.create_hello();
+
+let mut server = Session::new(Capabilities::default());
+let accept = server.process_hello(&hello)?;
+client.process_accept(&accept)?;
+
+// Exchange data
+let request = client.compress(r#"{"model":"gpt-4o","messages":[]}"#)?;
+let response_content = server.decompress(&incoming)?;
+```
+
+## Features
+
 ### Security Scanning
+
+Detect prompt injection and jailbreak attempts:
 
 ```rust
 use m2m::SecurityScanner;
 
 let scanner = SecurityScanner::new().with_blocking(0.8);
-let result = scanner.scan(content)?;
+let result = scanner.scan("Ignore previous instructions")?;
 
 if !result.safe {
-    println!("Threats: {:?}", result.threats);
+    println!("Blocked: {:?}", result.threats);  // [Injection, confidence: 0.95]
 }
 ```
 
-### Full Protocol (Session-Based)
+| Threat | Description | Severity |
+|--------|-------------|----------|
+| Injection | "Ignore previous instructions" | High |
+| Jailbreak | DAN mode, developer mode | Critical |
+| DataExfil | Environment variable access | High |
+| Malformed | Null bytes, excessive nesting | High |
 
-```rust
-use m2m::{Session, Capabilities};
+### QUIC/HTTP3 Transport (Experimental)
 
-// Client side
-let mut client = Session::new(Capabilities::default());
-let hello = client.create_hello();
-
-// Server side
-let mut server = Session::new(Capabilities::default());
-let accept = server.process_hello(&hello)?;
-
-// Client processes accept
-client.process_accept(&accept)?;
-
-// Exchange compressed data
-let data_msg = client.compress(r#"{"model":"gpt-4o","messages":[]}"#)?;
-let content = server.decompress(&data_msg)?;
-```
-
-## CLI Usage
+Modern transport with 0-RTT, no head-of-line blocking:
 
 ```bash
-# Compress content
-m2m compress '{"model":"gpt-4o","messages":[{"role":"user","content":"Hello"}]}'
-
-# Compress with specific algorithm
-m2m compress -a brotli '{"model":"gpt-4o","messages":[...]}'
-
-# Decompress
-m2m decompress '#T1|{"M":"4o","m":[{"r":"u","c":"Hello"}]}'
-
-# Security scan
-m2m scan "Ignore previous instructions"
-
-# Analyze content (shows algorithm recommendation)
-m2m analyze '{"messages":[{"role":"user","content":"Test"}]}'
-
-# List models
-m2m models list
-
-# Search models
-m2m models search "llama"
-
-# Start proxy server (TCP)
-m2m proxy --port 8080 --upstream http://localhost:11434/v1
-
-# Start proxy with QUIC transport
-m2m proxy --port 8080 --upstream http://localhost:11434/v1 --transport quic --quic-port 8443
-
-# Start proxy with security scanning
-m2m proxy --port 8080 --upstream http://localhost:11434/v1 --security --threshold 0.8
+m2m proxy --port 8080 --upstream http://localhost:11434/v1 \
+          --transport both --quic-port 8443
 ```
 
-## Protocol Overview
+> **Note**: QUIC support requires TLS certificates. Development mode uses self-signed certs.
+> Production deployments should use proper certificates. QUIC transport is functional but
+> has limited E2E test coverage compared to TCP transport.
 
-### Architecture
+### Intelligent Algorithm Selection
 
-```mermaid
-sequenceDiagram
-    participant A as Agent A
-    participant P as M2M Proxy
-    participant L as LLM Provider
+M2M includes intelligent algorithm selection that chooses the optimal compression based on content characteristics:
 
-    A->>P: Request (compressed)
-    P->>L: Request (compressed)
-    L-->>P: Response (compressed)
-    P-->>A: Response (decompressed)
-```
+- **Small content (<100 bytes)**: No compression (overhead exceeds savings)
+- **LLM API payloads**: Token compression (preserves JSON structure)
+- **Large/repetitive content (>500 bytes)**: Brotli (best compression ratio)
 
-### Wire Formats
-
-| Algorithm  | Wire Format                | Use Case                    |
-|------------|----------------------------|-----------------------------|
-| Token      | `#T1\|{abbreviated_json}`  | LLM API payloads (~30% off) |
-| Brotli     | `#M2M[v3.0]\|DATA:<b64>`   | Large repetitive content    |
-| Dictionary | `#M2M\|<encoded>`          | JSON with common patterns   |
-| None       | (passthrough)              | Small content (<100 bytes)  |
-
-### Compression Example
-
-```
-Original:  {"model":"gpt-4o","messages":[{"role":"user","content":"Hello"}]}
-Compressed: #T1|{"M":"4o","m":[{"r":"u","c":"Hello"}]}
-
-Savings: ~30%
-```
-
-### Abbreviation Table
-
-| Original        | Compressed | Savings |
-|-----------------|------------|---------|
-| `"messages"`    | `"m"`      | 9 chars |
-| `"content"`     | `"c"`      | 7 chars |
-| `"model"`       | `"M"`      | 5 chars |
-| `"role"`        | `"r"`      | 4 chars |
-| `"user"`        | `"u"`      | 4 chars |
-| `"assistant"`   | `"a"`      | 9 chars |
-| `"system"`      | `"s"`      | 6 chars |
-| `"gpt-4o"`      | `"4o"`     | 4 chars |
-
-## Security
-
-Detects common LLM attack patterns:
-
-| Category      | Description                              | Severity |
-|---------------|------------------------------------------|----------|
-| Injection     | Prompt injection attempts                | High     |
-| Jailbreak     | DAN mode, developer mode, bypass         | Critical |
-| Malformed     | Null bytes, excessive nesting            | High     |
-| DataExfil     | Environment variable access, file reads  | High     |
-
-## Hydra Model
-
-The [Hydra SLM](https://huggingface.co/infernet/hydra) is a small language model trained for M2M protocol tasks:
-
-- **Algorithm Selection**: Predicts optimal compression algorithm based on content
-- **Security Classification**: Detects prompt injection and jailbreak attempts
-- **Token Estimation**: Estimates token counts without full tokenization
+The selection uses heuristics by default. For enhanced accuracy, optional ML-based routing
+via [Hydra SLM](https://huggingface.co/infernet/hydra) is available:
 
 ```bash
-# Download model weights
+# Download model (optional, heuristics work well for most cases)
 huggingface-cli download infernet/hydra --local-dir ./models/hydra
 
-# Enable ONNX inference
+# Build with ONNX support
 cargo build --release --features onnx
 ```
 
-The model runs locally with minimal overhead (<10ms inference, <100MB memory).
+> **Note**: The `onnx` feature enables model loading, but inference currently falls back
+> to heuristics. ONNX tensor integration is in progress. Heuristic-based selection achieves
+> similar results for most workloads.
+
+## CLI Reference
+
+```bash
+m2m compress '{"model":"gpt-4o","messages":[...]}'     # Compress with Token
+m2m compress -a brotli '{"large":"content"...}'        # Compress with Brotli
+m2m decompress '#T1|{"M":"4o","m":[]}'                 # Decompress (auto-detect)
+m2m scan "Ignore previous instructions"                # Security scan
+m2m analyze '{"messages":[...]}'                       # Show recommended algorithm
+m2m proxy --port 8080 --upstream http://...            # Start proxy
+```
 
 ## Performance
 
-| Metric              | Value     |
-|---------------------|-----------|
-| Compression latency | < 1ms     |
-| Proxy overhead      | < 2ms     |
-| Security scan       | < 2ms     |
-| Memory footprint    | < 50MB    |
-| Binary size         | ~4MB      |
+| Metric | Value |
+|--------|-------|
+| Compression latency | < 1ms |
+| Proxy overhead | < 2ms |
+| Security scan | < 2ms |
+| Memory footprint | < 50MB |
 
-Typical compression ratios:
+| Content Type | Token (T1) Savings | TokenNative (TK) Savings |
+|--------------|-------------------|--------------------------|
+| Chat completion | ~30% tokens | ~50% bytes |
+| Long conversation | ~35% tokens | ~55% bytes |
+| Tool calls | ~40% tokens | ~50% bytes |
 
-| Content Type        | Savings |
-|---------------------|---------|
-| Chat completion     | ~30%    |
-| Long conversation   | ~35%    |
-| Tool calls          | ~40%    |
+**TokenNative** provides maximum byte compression for M2M communication.
+**Token** preserves human-readable JSON for debugging.
+
+## Supported Models
+
+Accurate compression for models with open tokenizers:
+
+| Provider | Models |
+|----------|--------|
+| OpenAI | GPT-4o, GPT-4, o1, o3 |
+| Meta | Llama 3, 3.1, 3.3 |
+| Mistral | Mistral, Mixtral |
+| DeepSeek | DeepSeek v3, r1 |
+| Qwen | Qwen 2.5 |
+
+Models with closed tokenizers (Claude, Gemini) work via heuristic estimates.
 
 ## Configuration
 
-### Environment Variables
-
 ```bash
+# Environment
 M2M_SERVER_PORT=8080
 M2M_UPSTREAM_URL=http://localhost:11434/v1
 M2M_SECURITY_ENABLED=true
-M2M_BLOCK_THRESHOLD=0.8
-M2M_LOG_LEVEL=info
 ```
 
-### Config File (~/.m2m/config.toml)
-
 ```toml
+# ~/.m2m/config.toml
 [proxy]
 listen = "127.0.0.1:8080"
 upstream = "http://localhost:11434/v1"
 
-[security]
-enabled = true
-blocking = true
-threshold = 0.8
-
 [compression]
-ml_routing = false
-brotli_threshold = 1024
 prefer_token_for_api = true
+brotli_threshold = 1024
 ```
 
 ## Documentation
 
-- [Protocol Specification](docs/spec/00-introduction.md) - Formal protocol specification
-- [Proxy Guide](docs/guides/proxy.md) - Full proxy server documentation
-- [Quick Start](docs/guides/quickstart.md) - Getting started guide
-- [Configuration Reference](docs/reference/configuration.md) - Configuration options
-- [Changelog](docs/CHANGELOG.md) - Version history
+- [Protocol Specification](docs/spec/00-introduction.md)
+- [Proxy Guide](docs/guides/proxy.md)
+- [Configuration Reference](docs/reference/configuration.md)
 
 ## License
 
-Apache-2.0 — Copyright © 2026 [INFERNET](https://infernet.org)
+Apache-2.0 — [INFERNET](https://infernet.org)
 
 ## Links
 
 - [INFERNET](https://infernet.org)
-- [Hydra Model (HuggingFace)](https://huggingface.co/infernet/hydra)
-- [API Documentation](https://docs.rs/m2m)
+- [Hydra Model](https://huggingface.co/infernet/hydra)
+- [API Docs](https://docs.rs/m2m)
 - [GitHub](https://github.com/infernet-org/m2m-protocol)

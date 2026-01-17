@@ -11,8 +11,9 @@ M2M Protocol supports multiple compression algorithms optimized for different co
 
 | Algorithm | Tag | Best For | Typical Savings |
 |-----------|-----|----------|-----------------|
-| Token | `T1` | LLM API payloads | 25-40% |
-| Brotli | `BR` | Large content (>4KB) | 60-80% |
+| TokenNative | `TK` | Small-medium LLM API (<1KB) | 50-60% |
+| Token | `T1` | LLM API payloads (fallback) | 25-40% |
+| Brotli | `BR` | Large content (>1KB) | 60-80% |
 | Dictionary | `DI` | Repetitive patterns | 20-30% |
 | None | - | Small content (<100B) | 0% |
 
@@ -23,9 +24,9 @@ M2M Protocol supports multiple compression algorithms optimized for different co
 Implementations SHOULD select algorithms based on:
 
 1. **Content size**: Small content (<100 bytes) → None
-2. **Content type**: JSON with LLM keys → Token
-3. **Repetition**: Highly repetitive → Brotli
-4. **Token sensitivity**: API-bound → Token preferred
+2. **Content type**: JSON with LLM keys → TokenNative (preferred) or Token
+3. **Content size threshold**: Large content (>1KB) → Brotli
+4. **Token sensitivity**: API-bound, small-medium → TokenNative preferred
 
 ### 5.2.2 Selection Heuristics
 
@@ -33,12 +34,17 @@ Implementations SHOULD select algorithms based on:
 if content_size < 100:
     return None
 elif is_llm_api_payload(content):
-    if content_size > 4096 and repetition_ratio > 0.3:
+    if content_size < 1024:
+        return TokenNative  # Best for M2M token efficiency
+    elif content_size > 1024 and repetition_ratio > 0.3:
         return Brotli
     else:
-        return Token
+        return TokenNative
 else:
-    return Brotli
+    if content_size > 1024:
+        return Brotli
+    else:
+        return TokenNative
 ```
 
 ## 5.3 Token Compression (Algorithm T1)
@@ -216,7 +222,111 @@ function decompress_token(wire):
 
 **Savings:** 34% bytes, 31% tokens
 
-## 5.4 Brotli Compression (Algorithm BR)
+## 5.4 TokenNative Compression (Algorithm TK)
+
+### 5.4.1 Overview
+
+TokenNative compression transmits BPE token IDs directly instead of text. The tokenizer vocabulary serves as the compression dictionary, achieving 50-60% compression on raw bytes.
+
+Unlike Token compression (T1) which abbreviates keys, TokenNative converts the entire content to token IDs, providing maximum compression for M2M communication where both endpoints share the same tokenizer.
+
+### 5.4.2 Wire Format
+
+```
+#TK|<tokenizer_id>|<base64_varint_tokens>
+```
+
+**Components:**
+- `#TK|` - Algorithm prefix (4 bytes)
+- `<tokenizer_id>` - Single character: `C` (cl100k), `O` (o200k), `L` (llama)
+- `|` - Separator
+- `<base64_varint_tokens>` - Base64-encoded VarInt token IDs
+
+### 5.4.3 Supported Tokenizers
+
+| ID | Tokenizer | Vocabulary Size | Models |
+|----|-----------|-----------------|--------|
+| `C` | cl100k_base | 100,256 | GPT-3.5, GPT-4 (canonical fallback) |
+| `O` | o200k_base | 200,019 | GPT-4o, o1, o3 |
+| `L` | Llama BPE | 128,256 | Llama 3, Mistral |
+
+### 5.4.4 VarInt Encoding
+
+Token IDs are encoded using variable-length integers:
+
+| Value Range | Bytes | Encoding |
+|-------------|-------|----------|
+| 0-127 | 1 | `0xxxxxxx` |
+| 128-16383 | 2 | `1xxxxxxx 0xxxxxxx` |
+| 16384+ | 3+ | Continuation bits |
+
+Average encoding: ~1.5 bytes per token for typical vocabularies.
+
+### 5.4.5 Binary Format
+
+For binary-safe channels (WebSocket binary, QUIC), skip Base64:
+
+```
+<tokenizer_byte><varint_tokens>
+```
+
+- Byte 0: Tokenizer ID (0=cl100k, 1=o200k, 2=llama)
+- Bytes 1+: Raw VarInt-encoded token IDs
+
+This achieves ~50% compression (vs ~75% with Base64 overhead).
+
+### 5.4.6 Compression Algorithm
+
+```
+function compress_token_native(text, encoding):
+    tokens = tokenize(text, encoding)
+    varint_bytes = varint_encode(tokens)
+    base64_data = base64_encode(varint_bytes)
+    return "#TK|" + encoding_id(encoding) + "|" + base64_data
+
+function decompress_token_native(wire):
+    parts = parse_wire(wire)  # ["#TK", tokenizer_id, base64_data]
+    encoding = encoding_from_id(parts[1])
+    varint_bytes = base64_decode(parts[2])
+    tokens = varint_decode(varint_bytes)
+    return detokenize(tokens, encoding)
+```
+
+### 5.4.7 Compression Ratios
+
+| Content Type | Original | Compressed | Ratio |
+|--------------|----------|------------|-------|
+| Small JSON (<200B) | 200 bytes | 80 bytes | 60% |
+| Medium JSON (~1KB) | 1,024 bytes | 450 bytes | 56% |
+| Large JSON (~10KB) | 10,240 bytes | 4,600 bytes | 55% |
+
+### 5.4.8 When to Use
+
+- **Prefer TokenNative** for:
+  - Small-to-medium LLM API payloads (<1KB)
+  - M2M communication where both endpoints support it
+  - Maximum token efficiency
+
+- **Prefer Brotli** for:
+  - Large content (>1KB)
+  - Highly repetitive content
+  - Non-LLM content
+
+### 5.4.9 Example
+
+**Original (68 bytes):**
+```json
+{"model":"gpt-4o","messages":[{"role":"user","content":"Hello"}]}
+```
+
+**TokenNative Wire (~40 bytes):**
+```
+#TK|C|W3sib29kZWwiOiJncHQ...
+```
+
+**Savings:** 41% bytes, same semantic content
+
+## 5.5 Brotli Compression (Algorithm BR)
 
 ### 5.4.1 Overview
 
@@ -246,7 +356,7 @@ Brotli compression is used for large content where byte reduction outweighs Base
 #BR|G6kEABwHcNP2Yk9N...base64...
 ```
 
-## 5.5 Dictionary Compression (Algorithm DI)
+## 5.6 Dictionary Compression (Algorithm DI)
 
 ### 5.5.1 Overview
 
@@ -269,7 +379,7 @@ Dictionary compression encodes common JSON patterns as single bytes.
 
 Patterns in the 0x80-0xFF byte range are reserved for dictionary codes.
 
-## 5.6 No Compression
+## 5.7 No Compression
 
 ### 5.6.1 When to Use
 
@@ -281,24 +391,44 @@ Patterns in the 0x80-0xFF byte range are reserved for dictionary codes.
 
 Content is passed through without prefix modification.
 
-## 5.7 Algorithm Negotiation
+## 5.8 Algorithm Negotiation
 
-During session establishment, endpoints negotiate supported algorithms:
+During session establishment, endpoints negotiate supported algorithms and encodings:
 
-1. Client sends list of supported algorithms in HELLO
+1. Client sends list of supported algorithms and encodings in HELLO
 2. Server responds with intersection in ACCEPT
 3. Subsequent DATA messages use any negotiated algorithm
 
-For stateless mode, the prefix indicates the algorithm used.
+For TokenNative, encoding negotiation ensures both endpoints use the same tokenizer:
 
-## 5.8 Decompression
+```
+Client capabilities:
+  algorithms: [TOKEN_NATIVE, TOKEN, BROTLI]
+  encodings: [CL100K_BASE, O200K_BASE]
+  preferred_encoding: O200K_BASE
 
-### 5.8.1 Algorithm Detection
+Server capabilities:
+  algorithms: [TOKEN_NATIVE, BROTLI]
+  encodings: [CL100K_BASE]
+  preferred_encoding: CL100K_BASE
+
+Negotiated:
+  algorithms: [TOKEN_NATIVE, BROTLI]
+  encoding: CL100K_BASE  (intersection, fallback to canonical)
+```
+
+For stateless mode, the prefix indicates the algorithm and encoding used.
+
+## 5.9 Decompression
+
+### 5.9.1 Algorithm Detection
 
 Implementations MUST detect algorithm from prefix:
 
 ```
-if starts_with("#T1|"):
+if starts_with("#TK|"):
+    return decompress_token_native(content)
+elif starts_with("#T1|"):
     return decompress_token(content)
 elif starts_with("#BR|"):
     return decompress_brotli(content)
@@ -308,7 +438,7 @@ else:
     return content  # No compression
 ```
 
-### 5.8.2 Error Handling
+### 5.9.2 Error Handling
 
 - Invalid prefix → return error
 - Decompression failure → return error

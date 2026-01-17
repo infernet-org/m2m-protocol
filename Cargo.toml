@@ -19,6 +19,14 @@ path = "src/lib.rs"
 name = "m2m"
 path = "src/bin/m2m.rs"
 
+[[bin]]
+name = "benchmark"
+path = "src/bin/benchmark.rs"
+
+[[bin]]
+name = "m2m-ai-test"
+path = "src/bin/m2m_ai_test.rs"
+
 [dependencies]
 # Serialization
 serde = { version = "1.0", features = ["derive"] }

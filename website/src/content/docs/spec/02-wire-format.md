@@ -29,11 +29,11 @@ Payload     = Compressed-JSON / Raw-Content
 
 ## 3.3 Algorithm Tags
 
-| Tag | Algorithm | Description |
-|-----|-----------|-------------|
-| `T1` | Token v1 | Semantic key/value abbreviation |
-| `BR` | Brotli | Brotli compression + Base64 |
-| `DI` | Dictionary | Pattern-based encoding |
+| Prefix | Algorithm | Description |
+|--------|-----------|-------------|
+| `#T1\|` | Token v1 | Semantic key/value abbreviation |
+| `#M2M[v3.0]\|DATA:` | Brotli | Brotli compression + Base64 |
+| `#M2M\|` | Dictionary | Pattern-based encoding |
 
 ### 3.3.1 Token Algorithm (`#T1|`)
 
@@ -49,24 +49,24 @@ Original:  {"model":"gpt-4o","messages":[{"role":"user","content":"Hi"}]}
 Wire:      #T1|{"M":"4o","m":[{"r":"u","c":"Hi"}]}
 ```
 
-### 3.3.2 Brotli Algorithm (`#BR|`)
+### 3.3.2 Brotli Algorithm (`#M2M[v3.0]|DATA:`)
 
 ```
-#BR|<base64-encoded-brotli>
+#M2M[v3.0]|DATA:<base64-encoded-brotli>
 ```
 
-The payload is Brotli-compressed content encoded as Base64.
+The payload is Brotli-compressed content encoded as Base64. The version tag (`v3.0`) indicates protocol version.
 
 **Example:**
 ```
 Original:  {"model":"gpt-4o","messages":[...large content...]}
-Wire:      #BR|G6kEABwHcNP2Yk9N...
+Wire:      #M2M[v3.0]|DATA:G6kEABwHcNP2Yk9N...
 ```
 
-### 3.3.3 Dictionary Algorithm (`#DI|`)
+### 3.3.3 Dictionary Algorithm (`#M2M|`)
 
 ```
-#DI|<pattern-encoded>
+#M2M|<pattern-encoded>
 ```
 
 Reserved for pattern-based dictionary encoding. See [04-compression.md](04-compression.md).
@@ -118,14 +118,13 @@ Implementations:
 ```abnf
 ; M2M Protocol Wire Format Grammar (RFC 5234)
 
-m2m-message    = prefix PIPE payload
-prefix         = "#" algorithm-tag
-algorithm-tag  = token-tag / brotli-tag / dict-tag
-token-tag      = "T1"
-brotli-tag     = "BR"
-dict-tag       = "DI"
+m2m-message    = token-message / brotli-message / dict-message
+token-message  = "#T1" PIPE payload
+brotli-message = "#M2M[v3.0]" PIPE "DATA:" base64-data
+dict-message   = "#M2M" PIPE payload
 
 PIPE           = %x7C                    ; |
+base64-data    = *( ALPHA / DIGIT / "+" / "/" / "=" )
 
 payload        = json-value
 json-value     = json-object / json-array / json-string /

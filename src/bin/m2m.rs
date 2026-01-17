@@ -12,6 +12,7 @@
 
 use std::io::{self, Read};
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
@@ -651,9 +652,8 @@ fn cmd_proxy(
         .init();
 
     // Parse transport kind
-    let transport_kind = TransportKind::from_str(&transport).ok_or_else(|| {
-        anyhow::anyhow!("Invalid transport: {}. Use: tcp, quic, both", transport)
-    })?;
+    let transport_kind = TransportKind::from_str(&transport)
+        .map_err(|_| anyhow::anyhow!("Invalid transport: {}. Use: tcp, quic, both", transport))?;
 
     // Get API key from arg or environment
     let api_key = api_key.or_else(|| std::env::var("OPENAI_API_KEY").ok());
@@ -702,9 +702,7 @@ fn cmd_proxy(
     let server = ProxyServer::new(config);
 
     let runtime = tokio::runtime::Runtime::new()?;
-    runtime.block_on(async {
-        server.run().await.map_err(|e| anyhow::anyhow!("{}", e))
-    })
+    runtime.block_on(async { server.run().await.map_err(|e| anyhow::anyhow!("{}", e)) })
 }
 
 // Helper functions

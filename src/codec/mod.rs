@@ -76,26 +76,39 @@ mod engine;
 mod streaming;
 mod tables;
 mod token;
+mod token_native;
 
 pub use algorithm::{Algorithm, CompressionResult};
 pub use brotli::BrotliCodec;
 pub use dictionary::DictionaryCodec;
 pub use engine::{CodecEngine, ContentAnalysis};
-pub use streaming::{SseEvent, StreamingCodec, StreamingDecompressor, StreamingStats};
-pub use tables::{KEY_ABBREV, KEY_EXPAND, MODEL_ABBREV, MODEL_EXPAND, ROLE_ABBREV, ROLE_EXPAND};
+pub use streaming::{
+    SseEvent, StreamingCodec, StreamingDecompressor, StreamingMode, StreamingStats,
+};
+pub use tables::{
+    is_default_value, KEY_ABBREV, KEY_EXPAND, MODEL_ABBREV, MODEL_EXPAND, PATTERN_ABBREV,
+    PATTERN_EXPAND, ROLE_ABBREV, ROLE_EXPAND,
+};
 pub use token::TokenCodec;
+pub use token_native::TokenNativeCodec;
 
 /// Check if content is in M2M compressed format
 pub fn is_m2m_format(content: &str) -> bool {
-    content.starts_with("#M2M") || content.starts_with("#T1|")
+    content.starts_with("#M2M") || content.starts_with("#T1|") || content.starts_with("#TK|")
 }
 
 /// Detect the compression algorithm used in a message
+#[allow(deprecated)]
 pub fn detect_algorithm(content: &str) -> Option<Algorithm> {
-    if content.starts_with("#T1|") {
+    if content.starts_with("#TK|") {
+        Some(Algorithm::TokenNative)
+    } else if content.starts_with("#T1|") {
         Some(Algorithm::Token)
     } else if content.starts_with("#M2M[v3.0]|") {
         Some(Algorithm::Brotli)
+    } else if content.starts_with("#M2M[v2.0]|") {
+        // v2.0 format (Zlib) - deprecated but detected for backwards compatibility
+        Some(Algorithm::Zlib)
     } else if content.starts_with("#M2M[v1.0]|") || content.starts_with("#M2M|") {
         Some(Algorithm::Dictionary)
     } else {

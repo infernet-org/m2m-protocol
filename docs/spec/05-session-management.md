@@ -96,20 +96,45 @@ Capabilities are negotiated as the intersection of client and server support:
 
 ```
 Client capabilities:
-  algorithms: [TOKEN, BROTLI, DICTIONARY]
+  algorithms: [TOKEN_NATIVE, TOKEN, BROTLI, DICTIONARY]
+  encodings: [CL100K_BASE, O200K_BASE]
+  preferred_encoding: O200K_BASE
   security_scanning: true
   max_payload_size: 16777216
 
 Server capabilities:
-  algorithms: [TOKEN, BROTLI]
+  algorithms: [TOKEN_NATIVE, TOKEN, BROTLI]
+  encodings: [CL100K_BASE]
+  preferred_encoding: CL100K_BASE
   security_scanning: true
   max_payload_size: 10485760
 
 Negotiated (intersection):
-  algorithms: [TOKEN, BROTLI]
+  algorithms: [TOKEN_NATIVE, TOKEN, BROTLI]
+  encoding: CL100K_BASE  (prefer client's if supported, else first common)
   security_scanning: true
   max_payload_size: 10485760  (minimum)
 ```
+
+### 6.3.4 Encoding Negotiation
+
+For TokenNative compression, both endpoints must agree on a tokenizer encoding:
+
+1. Client advertises `encodings` list and `preferred_encoding`
+2. Server checks if `preferred_encoding` is in its supported list
+3. If yes, use client's preferred encoding
+4. If no, find first mutually supported encoding
+5. Fallback to `CL100K_BASE` (canonical) if no intersection
+
+**Encoding IDs:**
+
+| Encoding | Wire ID | Description |
+|----------|---------|-------------|
+| `CL100K_BASE` | `C` | GPT-3.5/GPT-4 tokenizer (canonical fallback) |
+| `O200K_BASE` | `O` | GPT-4o/o1/o3 tokenizer |
+| `LLAMA_BPE` | `L` | Llama 3/Mistral tokenizer |
+
+Implementations MUST support `CL100K_BASE` as the canonical fallback.
 
 ## 6.4 Session Parameters
 

@@ -66,6 +66,7 @@ pub struct CompressionDecision {
 pub struct AlgorithmProbs {
     pub none: f32,
     pub token: f32,
+    pub token_native: f32,
     pub brotli: f32,
     pub zlib: f32,
     pub dictionary: f32,
@@ -73,10 +74,14 @@ pub struct AlgorithmProbs {
 
 impl AlgorithmProbs {
     /// Get the highest probability algorithm
+    #[allow(deprecated)]
     pub fn best(&self) -> (Algorithm, f32) {
         let mut best = (Algorithm::None, self.none);
         if self.token > best.1 {
             best = (Algorithm::Token, self.token);
+        }
+        if self.token_native > best.1 {
+            best = (Algorithm::TokenNative, self.token_native);
         }
         if self.brotli > best.1 {
             best = (Algorithm::Brotli, self.brotli);
@@ -130,17 +135,15 @@ impl std::fmt::Display for ThreatType {
 }
 
 /// Hydra model wrapper
+#[derive(Clone)]
 pub struct HydraModel {
-    /// Tokenizer for input preparation
-    #[allow(dead_code)]
+    /// Tokenizer for input preparation (used in heuristics)
     tokenizer: SimpleTokenizer,
     /// Model loaded state
     loaded: bool,
-    /// Model path
-    #[allow(dead_code)]
+    /// Model path (for debugging/logging)
     model_path: Option<String>,
     /// Use heuristics when model unavailable
-    #[allow(dead_code)]
     use_fallback: bool,
     /// ONNX session (optional, loaded on demand)
     #[cfg(feature = "onnx")]
@@ -221,6 +224,21 @@ impl HydraModel {
         self.loaded
     }
 
+    /// Get the model path (if loaded or attempted to load)
+    pub fn model_path(&self) -> Option<&str> {
+        self.model_path.as_deref()
+    }
+
+    /// Check if fallback heuristics are enabled
+    pub fn uses_fallback(&self) -> bool {
+        self.use_fallback
+    }
+
+    /// Estimate token count for content using the internal tokenizer
+    pub fn estimate_tokens(&self, content: &str) -> usize {
+        self.tokenizer.count_tokens(content)
+    }
+
     /// Predict compression algorithm for content
     pub fn predict_compression(&self, content: &str) -> Result<CompressionDecision> {
         #[cfg(feature = "onnx")]
@@ -244,8 +262,15 @@ impl HydraModel {
     }
 
     /// Heuristic-based compression prediction
+    ///
+    /// Uses epistemic analysis to select optimal algorithm:
+    /// - K (known): TokenNative achieves ~50% compression on raw bytes
+    /// - K (known): Brotli is optimal for large repetitive content
+    /// - B (believed): TokenNative is best for small-medium LLM API JSON (<1KB)
     fn predict_compression_heuristic(&self, content: &str) -> Result<CompressionDecision> {
         let len = content.len();
+        // Use tokenizer for better size estimation
+        let token_count = self.tokenizer.count_tokens(content);
 
         // Analyze content characteristics
         let is_json = content.trim().starts_with('{') || content.trim().starts_with('[');
@@ -255,32 +280,50 @@ impl HydraModel {
         // Build probability scores
         let mut probs = AlgorithmProbs::default();
 
-        // LLM API JSON: TOKEN (even for small content)
+        // LLM API JSON: TokenNative (best for M2M token efficiency)
+        // Epistemic: K - TokenNative achieves ~50% raw byte compression
         if is_llm_api {
-            probs.token = 0.7;
-            probs.brotli = 0.2;
-            probs.dictionary = 0.1;
+            if len < 1024 {
+                // Small-medium LLM API: TokenNative wins
+                probs.token_native = 0.8;
+                probs.token = 0.1;
+                probs.brotli = 0.1;
+            } else {
+                // Large LLM API: Brotli wins due to dictionary compression
+                probs.brotli = 0.7;
+                probs.token_native = 0.2;
+                probs.token = 0.1;
+            }
         }
-        // Small content: NONE
-        else if len < 100 {
+        // Small content (by bytes or tokens): NONE
+        // Epistemic: K - Compression overhead exceeds savings
+        else if len < 100 || token_count < 25 {
             probs.none = 0.9;
-            probs.token = 0.1;
+            probs.token_native = 0.1;
         }
         // Large repetitive content: BROTLI
+        // Epistemic: K - Brotli's dictionary compression excels here
         else if len > 1024 && has_repetition > 0.3 {
             probs.brotli = 0.8;
-            probs.zlib = 0.15;
+            probs.token_native = 0.15;
             probs.token = 0.05;
         }
-        // JSON with patterns: DICTIONARY
-        else if is_json && len > 200 {
-            probs.dictionary = 0.5;
-            probs.token = 0.3;
-            probs.brotli = 0.2;
+        // Medium JSON: TokenNative
+        // Epistemic: B - TokenNative likely better than abbreviations
+        else if is_json && len > 200 && len < 1024 {
+            probs.token_native = 0.6;
+            probs.token = 0.25;
+            probs.brotli = 0.15;
         }
-        // Default: TOKEN
+        // Large JSON: Brotli
+        else if is_json && len >= 1024 {
+            probs.brotli = 0.6;
+            probs.token_native = 0.3;
+            probs.dictionary = 0.1;
+        }
+        // Default: TokenNative for M2M
         else {
-            probs.token = 0.5;
+            probs.token_native = 0.5;
             probs.brotli = 0.3;
             probs.none = 0.2;
         }
@@ -420,11 +463,24 @@ mod tests {
         let decision = model.predict_compression("hi").unwrap();
         assert_eq!(decision.algorithm, Algorithm::None);
 
-        // LLM API JSON -> TOKEN
+        // LLM API JSON -> TokenNative (M2M optimal)
         let llm_content =
             r#"{"model":"gpt-4o","messages":[{"role":"user","content":"Hello world!"}]}"#;
         let decision = model.predict_compression(llm_content).unwrap();
-        assert_eq!(decision.algorithm, Algorithm::Token);
+        assert_eq!(decision.algorithm, Algorithm::TokenNative);
+    }
+
+    #[test]
+    fn test_heuristic_large_content() {
+        let model = HydraModel::fallback_only();
+
+        // Large LLM API content -> Brotli (dictionary compression wins)
+        let large_content = format!(
+            r#"{{"model":"gpt-4o","messages":[{{"role":"user","content":"{}"}}]}}"#,
+            "Hello world! ".repeat(100)
+        );
+        let decision = model.predict_compression(&large_content).unwrap();
+        assert_eq!(decision.algorithm, Algorithm::Brotli);
     }
 
     #[test]
@@ -464,14 +520,15 @@ mod tests {
     fn test_algorithm_probs() {
         let probs = AlgorithmProbs {
             none: 0.1,
-            token: 0.6,
-            brotli: 0.2,
-            zlib: 0.05,
-            dictionary: 0.05,
+            token: 0.2,
+            token_native: 0.6,
+            brotli: 0.05,
+            zlib: 0.025,
+            dictionary: 0.025,
         };
 
         let (best, conf) = probs.best();
-        assert_eq!(best, Algorithm::Token);
+        assert_eq!(best, Algorithm::TokenNative);
         assert!((conf - 0.6).abs() < 0.001);
     }
 }
