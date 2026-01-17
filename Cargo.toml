@@ -69,8 +69,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
 # === NEW: M2M Protocol Dependencies ===
 
-# ONNX Runtime for Hydra ML inference
-ort = { version = "2.0.0-rc", default-features = false, features = ["load-dynamic"] }
+# ONNX Runtime for Hydra ML inference (optional - requires Rust 1.85+)
+ort = { version = "2.0.0-rc", default-features = false, features = ["load-dynamic"], optional = true }
 
 # Compression codecs
 brotli = "7.0"
@@ -135,8 +135,8 @@ debug = true
 
 [features]
 default = []
-# Enable ONNX Runtime for ML inference
-onnx = []
+# Enable ONNX Runtime for ML inference (requires Rust 1.85+ due to ort crate)
+onnx = ["dep:ort"]
 # CPU-only inference (no CUDA)
 cpu-only = []
 
