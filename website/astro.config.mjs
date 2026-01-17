@@ -5,10 +5,7 @@ export default defineConfig({
   site: 'https://m2m.infernet.org',
   integrations: [
     starlight({
-      title: 'M2M Protocol',
-      logo: {
-        src: './src/assets/logo.svg',
-      },
+      title: 'M2M',
       description:
         'High-performance Machine-to-Machine protocol for LLM API communication',
       social: {
