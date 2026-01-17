@@ -1,0 +1,56 @@
+# Cargo configuration for M2M Protocol
+# https://doc.rust-lang.org/cargo/reference/config.html
+
+[alias]
+# Quick commands
+b = "build"
+c = "check"
+t = "test"
+r = "run"
+br = "build --release"
+
+# Quality checks
+lint = "clippy --all-targets --all-features"
+lint-fix = "clippy --all-targets --all-features --fix --allow-dirty"
+audit-deps = "audit"
+
+# Documentation
+docs = "doc --no-deps --all-features --open"
+
+# Testing
+test-all = "test -- --include-ignored"
+
+[build]
+# Use all available CPU cores
+jobs = -1
+
+# Incremental compilation (faster dev builds)
+incremental = true
+
+[target.x86_64-unknown-linux-gnu]
+# Use mold linker if available (much faster linking)
+# Uncomment if mold is installed: sudo apt install mold
+# linker = "clang"
+# rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+
+[target.x86_64-apple-darwin]
+# Use lld linker on macOS if available
+# rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+
+[target.aarch64-apple-darwin]
+# Apple Silicon
+# rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+
+[env]
+# Enable backtraces by default in development
+RUST_BACKTRACE = { value = "1", force = false }
+
+[term]
+# Progress bar
+verbose = false
+color = "auto"
+
+[net]
+# Retry network operations
+retry = 3
+git-fetch-with-cli = true

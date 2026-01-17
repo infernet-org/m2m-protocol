@@ -1,0 +1,192 @@
+[package]
+name = "m2m-core"
+version = "0.2.0"
+edition = "2021"
+rust-version = "1.75"
+license = "Apache-2.0"
+description = "M2M Protocol - Intelligent machine-to-machine LLM communication with learned compression"
+repository = "https://github.com/infernet-org/m2m-protocol"
+keywords = ["llm", "compression", "tokens", "m2m", "protocol", "ai"]
+categories = ["compression", "web-programming", "science"]
+readme = "README.md"
+authors = ["M2M Protocol Contributors"]
+
+[lib]
+name = "m2m"
+path = "src/lib.rs"
+
+[[bin]]
+name = "m2m"
+path = "src/bin/m2m.rs"
+
+[dependencies]
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Tokenizer (OpenAI BPE)
+tiktoken-rs = "0.9"
+
+# Compile-time hash maps
+phf = { version = "0.11", features = ["macros"] }
+
+# Async runtime
+tokio = { version = "1.0", features = ["rt-multi-thread", "macros", "net", "sync", "time", "io-util"] }
+
+# HTTP server
+axum = "0.7"
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors", "trace"] }
+
+# HTTP client
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+
+# Streaming
+futures = "0.3"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Config
+toml = "0.8"
+dirs = "5.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# === NEW: M2M Protocol Dependencies ===
+
+# ONNX Runtime for Hydra ML inference
+ort = { version = "2.0.0-rc", default-features = false, features = ["load-dynamic"] }
+
+# Compression codecs
+brotli = "7.0"
+flate2 = "1.0"  # zlib/gzip
+
+# Tensor operations (for inference)
+ndarray = "0.16"
+
+# Model loading
+safetensors = "0.4"
+
+# UUID for session IDs
+uuid = { version = "1.0", features = ["v4"] }
+
+# Base64 encoding for wire format
+base64 = "0.22"
+
+# Byte manipulation
+bytes = "1.0"
+
+# Regex for pattern matching (security)
+regex = { version = "1.0", features = ["perf"] }
+lazy_static = "1.4"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+tokio-test = "0.4"
+tempfile = "3.0"
+
+[build-dependencies]
+phf_codegen = "0.11"
+
+# [[bench]]
+# name = "inference"
+# harness = false
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
+
+[profile.dev]
+opt-level = 0
+debug = true
+
+[features]
+default = []
+# Enable ONNX Runtime for ML inference
+onnx = []
+# CPU-only inference (no CUDA)
+cpu-only = []
+
+# =============================================================================
+# Lints Configuration
+# =============================================================================
+
+[lints.rust]
+# Safety
+unsafe_code = "warn"
+# Documentation
+missing_docs = "warn"
+
+[lints.clippy]
+# Pedantic (enable selectively) - set lowest priority
+pedantic = { level = "warn", priority = -1 }
+
+# Allow common pedantic exceptions
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+doc_markdown = "allow"
+similar_names = "allow"
+too_many_lines = "allow"
+struct_excessive_bools = "allow"
+unreadable_literal = "allow"           # Context lengths like 128000 are fine
+needless_raw_string_hashes = "allow"   # Raw strings with # are clearer
+cast_possible_truncation = "allow"     # usize to f64 is intentional for stats
+cast_precision_loss = "allow"          # usize to f64 is intentional for stats
+cast_lossless = "allow"                # u8 to u32 is fine
+unnecessary_wraps = "allow"            # Result<T> for consistency
+redundant_closure_for_method_calls = "allow"  # Clearer in some contexts
+only_used_in_recursion = "allow"       # False positives with &self
+unused_self = "allow"                  # Preparation for future use
+manual_let_else = "allow"              # match is sometimes clearer
+return_self_not_must_use = "allow"     # Builder pattern methods
+uninlined_format_args = "allow"        # Explicit variables in format! is clearer
+manual_strip = "allow"                 # Manual prefix stripping can be clearer
+option_if_let_else = "allow"           # match is sometimes clearer
+map_unwrap_or = "allow"                # map().unwrap_or() is readable
+if_not_else = "allow"                  # != in conditions is fine
+match_same_arms = "allow"              # Sometimes intentional for clarity
+assigning_clones = "allow"             # Explicit clone assignment is clear
+format_push_string = "allow"           # format! append is fine for readability
+fn_params_excessive_bools = "allow"    # Sometimes needed for config
+struct_field_names = "allow"           # Same postfix can be clear (e.g., tokens)
+useless_vec = "allow"                  # vec![] for consistency
+single_char_pattern = "allow"          # String patterns can be clearer
+trivially_copy_pass_by_ref = "allow"   # Consistency in API design
+single_match = "allow"                 # match for clarity
+manual_is_power_of_two = "allow"       # Manual check can be clearer
+manual_map = "allow"                   # Explicit is sometimes clearer
+ref_option = "allow"                   # Option reference patterns are fine
+cast_sign_loss = "allow"               # usize to i64 is intentional
+io_other_error = "allow"               # std::io::Error::new() is fine
+ignored_unit_patterns = "allow"        # Ignore patterns are fine
+manual_saturating_arithmetic = "allow" # Manual checks can be clearer
+implicit_clone = "allow"               # to_string() on &str is fine
+to_string_trait_impl = "allow"         # to_string() impl is fine
+significant_drop_tightening = "allow"  # Drop order sometimes matters
+inefficient_to_string = "allow"        # &&str.to_string() is fine for clarity
+needless_pass_by_value = "allow"       # Pass by value for consistency
+checked_conversions = "allow"          # Manual checks can be clearer
+single_match_else = "allow"            # match with else can be clearer
+cast_possible_wrap = "allow"           # usize to i64 is intentional
+manual_range_contains = "allow"        # Manual checks can be clearer
+implicit_saturating_sub = "allow"      # Manual arithmetic is fine
+
+# Cargo
+multiple_crate_versions = "allow"      # Common in large dependency trees
+
+[lints.rustdoc]
+# Documentation quality
+broken_intra_doc_links = "warn"
+private_intra_doc_links = "warn"
