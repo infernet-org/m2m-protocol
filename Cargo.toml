@@ -160,6 +160,7 @@ must_use_candidate = "allow"
 missing_errors_doc = "allow"
 comparison_chain = "allow"         # if chains are sometimes clearer
 double_ended_iterator_last = "allow" # .last() is more readable than .next_back()
+manual_div_ceil = "allow"          # Manual div_ceil is compatible with older Rust
 missing_panics_doc = "allow"
 doc_markdown = "allow"
 similar_names = "allow"
