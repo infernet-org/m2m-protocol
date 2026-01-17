@@ -31,8 +31,7 @@ export default defineConfig({
         },
       ],
       editLink: {
-        baseUrl:
-          'https://github.com/infernet-org/m2m-protocol/edit/main/docs/',
+        baseUrl: 'https://github.com/infernet-org/m2m-protocol/edit/main/docs/',
       },
     }),
   ],
