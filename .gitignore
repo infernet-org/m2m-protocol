@@ -34,3 +34,10 @@ coverage/
 
 # Documentation build
 /doc/
+
+# Website / Astro
+website/node_modules/
+website/dist/
+website/.astro/
+website/.vercel/
+website/.netlify/
