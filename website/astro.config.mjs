@@ -32,7 +32,7 @@ export default defineConfig({
       ],
       editLink: {
         baseUrl:
-          'https://github.com/infernet-org/m2m-protocol/edit/main/rust/m2m-core/docs/',
+          'https://github.com/infernet-org/m2m-protocol/edit/main/docs/',
       },
     }),
   ],
