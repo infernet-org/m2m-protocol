@@ -236,5 +236,5 @@ json = true
 
 Output:
 ```json
-{"timestamp":"2024-01-17T12:00:00Z","level":"INFO","message":"Request compressed","algorithm":"token","ratio":0.66}
+{"timestamp":"2026-01-17T12:00:00Z","level":"INFO","message":"Request compressed","algorithm":"token","ratio":0.66}
 ```

@@ -4,7 +4,7 @@
 
 **Version**: 1.0  
 **Status**: Living Document  
-**Last Validated**: 2025-01-17  
+**Last Validated**: 2026-01-17  
 
 ---
 
@@ -105,7 +105,7 @@ Caveat: "Unsolved" may be strong; "under-addressed" is more accurate.
 
 ```
 ┌────────────────────────────────────────────────────────────────┐
-│ TOKENNATIVE BENCHMARK RESULTS (validated 2025-01-17)          │
+│ TOKENNATIVE BENCHMARK RESULTS (validated 2026-01-17)          │
 ├────────────────────────────────────────────────────────────────┤
 │                                                                │
 │ Wire Format (Base64, text-safe):                               │
@@ -125,7 +125,7 @@ Caveat: "Unsolved" may be strong; "under-addressed" is more accurate.
 
 ```
 ┌────────────────────────────────────────────────────────────────┐
-│ TOKEN (T1) BENCHMARK RESULTS (validated 2025-01-17)           │
+│ TOKEN (T1) BENCHMARK RESULTS (validated 2026-01-17)           │
 ├────────────────────────────────────────────────────────────────┤
 │                                                                │
 │ Token Savings:                                                 │
@@ -352,7 +352,7 @@ This is **mathematically certain**, not speculative:
 │ ○ Market may not value compression enough to adopt protocol    │
 │                                                                │
 │ TIMING ASSESSMENT:                                             │
-│ Window exists but is uncertain. 2024-2026 is plausible         │
+│ Window exists but is uncertain. 2026-2028 is plausible         │
 │ adoption window, but not guaranteed.                           │
 │                                                                │
 └────────────────────────────────────────────────────────────────┘
@@ -367,11 +367,11 @@ This is **mathematically certain**, not speculative:
 ### 5.1 If M2M Succeeds
 
 ```
-2025: Early adopters in cost-sensitive agent deployments
-2026: Integration with major agent frameworks
-2027: Protocol standardization efforts begin
-2028: Network effects create adoption momentum
-2030: M2M or successor becomes de-facto standard
+2026: Early adopters in cost-sensitive agent deployments (current)
+2027: Integration with major agent frameworks
+2028: Protocol standardization efforts begin
+2029: Network effects create adoption momentum
+2031: M2M or successor becomes de-facto standard
 ```
 
 ### 5.2 If M2M Fails
@@ -465,7 +465,7 @@ This document will be updated as claims are validated or falsified.
 ---
 
 **Document History**
-- v1.0 (2025-01-17): Initial vision document with epistemic grounding
+- v1.0 (2026-01-17): Initial vision document with epistemic grounding
 
 **Contributors**
 - INFERNET Protocol Team

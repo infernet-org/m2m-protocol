@@ -365,7 +365,7 @@ pub fn get_embedded_by_abbrev(abbrev: &str) -> Option<ModelCard> {
 
 /// Get pricing for popular models (per million tokens, USD)
 pub fn get_pricing(model_id: &str) -> Option<Pricing> {
-    // Prices as of January 2025 (approximate)
+    // Prices as of January 2026 (approximate)
     match model_id {
         // OpenAI
         "openai/gpt-4o" => Some(Pricing::from_per_million(2.50, 10.00)),
