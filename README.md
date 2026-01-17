@@ -217,6 +217,27 @@ curl http://localhost:8080/v1/chat/completions \
 
 Works with vLLM, Ollama, OpenAI, OpenRouter, Azure, or any OpenAI-compatible API.
 
+## Project Status
+
+> **Early Development** — M2M Protocol is under active development and should be considered prototype-level software. The core compression algorithms are functional and tested (148 tests passing), but the API may change, and some features (Hydra neural inference, QUIC transport) are experimental.
+
+**What works well:**
+- TokenNative compression (~30-35% wire savings, ~50% raw)
+- Token (T1) compression for human-readable output
+- Session management with capability negotiation
+- Security scanning (heuristic-based)
+
+**What's experimental:**
+- Hydra SLM neural inference (falls back to heuristics)
+- QUIC/HTTP3 transport (limited testing)
+- Multi-language implementations (Rust only currently)
+
+**Contributions welcome!** See our [issues](https://github.com/infernet-org/m2m-protocol/issues) or read [VISION.md](VISION.md) for the roadmap. We especially need help with:
+- Additional language implementations (Python, TypeScript, Go)
+- Hydra model training and ONNX integration
+- Real-world benchmarks and case studies
+- Documentation improvements
+
 ## Protocol Modes
 
 ### Stateless (Simple)
