@@ -1,0 +1,8 @@
+# Build output
+dist/
+
+# Dependencies
+node_modules/
+
+# Content copied from /docs at build time
+src/content/docs/
