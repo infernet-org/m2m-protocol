@@ -1,10 +1,8 @@
 # M2M Protocol
 
-[![Build Status](https://github.com/infernet-org/m2m-protocol/actions/workflows/ci.yml/badge.svg)](https://github.com/infernet-org/m2m-protocol/actions)
+[![INFERNET](https://img.shields.io/badge/INFERNET-m2m--protocol-black.svg)](https://infernet.org)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.75+-orange.svg)](https://www.rust-lang.org/)
-
-> Created by [Infernet](https://infernet.org) — The Internet of Autonomous Intelligence.
 
 High-performance Machine-to-Machine protocol for LLM API communication with intelligent compression, security scanning, and an OpenAI-compatible proxy.
 
@@ -171,14 +169,16 @@ m2m proxy --port 8080 --upstream http://localhost:11434/v1 --security --threshol
 
 ### Architecture
 
-```
-Agent A                        M2M Proxy                        LLM Provider
-   |                              |                                |
-   |------ Request ------------->|                                |
-   |       (compressed)          |------- Request --------------->|
-   |                              |       (compressed)             |
-   |<----- Response -------------|<------ Response ---------------|
-   |       (decompressed)        |       (compressed)             |
+```mermaid
+sequenceDiagram
+    participant A as Agent A
+    participant P as M2M Proxy
+    participant L as LLM Provider
+
+    A->>P: Request (compressed)
+    P->>L: Request (compressed)
+    L-->>P: Response (compressed)
+    P-->>A: Response (decompressed)
 ```
 
 ### Wire Formats
@@ -299,11 +299,11 @@ prefer_token_for_api = true
 
 ## License
 
-Apache-2.0 — Copyright © 2026 [Infernet](https://infernet.org)
+Apache-2.0 — Copyright © 2026 [INFERNET](https://infernet.org)
 
 ## Links
 
-- [Infernet](https://infernet.org) - The Internet of Autonomous Intelligence
+- [INFERNET](https://infernet.org)
 - [Hydra Model (HuggingFace)](https://huggingface.co/infernet/hydra)
 - [API Documentation](https://docs.rs/m2m)
 - [GitHub](https://github.com/infernet-org/m2m-protocol)
