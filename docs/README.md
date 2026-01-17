@@ -1,3 +1,8 @@
+---
+title: Documentation
+description: M2M Protocol documentation index
+---
+
 # M2M Protocol Documentation
 
 Version 1.0 | [GitHub](https://github.com/infernet-org/m2m-protocol) | [Hydra Model](https://huggingface.co/infernet/hydra)
