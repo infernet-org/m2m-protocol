@@ -42,7 +42,7 @@ Payload     = Compressed-JSON / Raw-Content
 #T1|<abbreviated-json>
 ```
 
-The payload is valid JSON with abbreviated keys and values. See [04-compression.md](04-compression.md) for mapping tables.
+The payload is valid JSON with abbreviated keys and values. See [Compression](../spec/04-compression/) for mapping tables.
 
 **Example:**
 ```
@@ -124,7 +124,7 @@ Wire:      #M2M[v3.0]|DATA:G6kEABwHcNP2Yk9N...
 #M2M|<pattern-encoded>
 ```
 
-Reserved for pattern-based dictionary encoding. See [04-compression.md](04-compression.md).
+Reserved for pattern-based dictionary encoding. See [Compression](../spec/04-compression/).
 
 ### 3.3.5 Deprecated Formats
 
@@ -233,7 +233,7 @@ For numeric values within JSON:
 
 ## 3.8 Versioning in Wire Format
 
-Protocol version is NOT embedded in every message. Version negotiation occurs during session establishment (see [05-session-management.md](05-session-management.md)).
+Protocol version is NOT embedded in every message. Version negotiation occurs during session establishment (see [Session Management](../spec/05-session-management/)).
 
 For stateless mode, the algorithm tag implies version:
 - `T1` = Token compression v1.0

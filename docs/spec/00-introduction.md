@@ -100,9 +100,9 @@ Client                          Server
 
 | Section | Contents |
 |---------|----------|
-| [01-terminology](01-terminology.md) | Definitions and RFC 2119 keywords |
-| [02-wire-format](02-wire-format.md) | Message structure and encoding |
-| [03-message-types](03-message-types.md) | HELLO, ACCEPT, DATA, etc. |
-| [04-compression](04-compression.md) | Algorithms and mappings |
-| [05-session-management](05-session-management.md) | State machine and lifecycle |
-| [06-security](06-security.md) | Threat model and mitigations |
+| [01-terminology](../spec/01-terminology/) | Definitions and RFC 2119 keywords |
+| [02-wire-format](../spec/02-wire-format/) | Message structure and encoding |
+| [03-message-types](../spec/03-message-types/) | HELLO, ACCEPT, DATA, etc. |
+| [04-compression](../spec/04-compression/) | Algorithms and mappings |
+| [05-session-management](../spec/05-session-management/) | State machine and lifecycle |
+| [06-security](../spec/06-security/) | Threat model and mitigations |

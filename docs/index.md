@@ -41,10 +41,10 @@ As autonomous agents multiply, three problems emerge:
 │                    ┌──────────────────────────────────┐                     │
 │                    │      COGNITIVE SECURITY          │                     │
 │                    │  ┌────────────────────────────┐  │                     │
-│                    │  │    Hydra BitNet MoE SLM    │  │                     │
+│                    │  │      Hydra MoE Model       │  │                     │
 │                    │  │  • Prompt injection detect │  │                     │
 │                    │  │  • Jailbreak detection     │  │                     │
-│                    │  │  • Semantic routing        │  │                     │
+│                    │  │  • Compression routing     │  │                     │
 │                    │  └────────────────────────────┘  │                     │
 │                    └──────────────────────────────────┘                     │
 │                                                                             │
@@ -59,15 +59,16 @@ As autonomous agents multiply, three problems emerge:
 
 Traditional security operates at network or application layers. M2M embeds security *within the protocol itself*, inspecting semantic content before compression.
 
-### Hydra: BitNet Mixture-of-Experts SLM
+### Hydra: Mixture-of-Experts Classifier
 
-A specialized small language model designed for protocol-embedded inference:
+A specialized classifier designed for protocol-embedded inference:
 
-- **Architecture**: BitNet 1.58-bit quantization with Mixture-of-Experts routing
-- **Purpose**: Semantic threat classification at wire speed
-- **Integration**: Runs alongside compression in the protocol stack
+- **Architecture**: 4-layer MoE, top-2 routing (vocab: 32K, hidden: 192)
+- **Size**: ~38MB safetensors — native Rust inference, no Python/ONNX required
+- **Tasks**: Compression routing (4-class) + Security screening (2-class)
+- **Fallback**: Heuristic rules when model unavailable
 
-`[Pattern matching: Available]` `[Neural inference: In development]`
+`[Pattern matching: Available]` `[Neural inference: Available]`
 
 ### What It Detects
 

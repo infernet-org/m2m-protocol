@@ -19,13 +19,13 @@ Formal protocol specification following IETF RFC conventions:
 
 | Document | Description |
 |----------|-------------|
-| [00-introduction.md](spec/00-introduction.md) | Protocol overview, goals, and scope |
-| [01-terminology.md](spec/01-terminology.md) | Definitions and RFC 2119 requirement keywords |
-| [02-wire-format.md](spec/02-wire-format.md) | Binary/text encoding specification |
-| [03-message-types.md](spec/03-message-types.md) | Complete message catalog |
-| [04-compression.md](spec/04-compression.md) | Compression algorithms and mappings |
-| [05-session-management.md](spec/05-session-management.md) | Session lifecycle and state machine |
-| [06-security.md](spec/06-security.md) | Security model and threat mitigations |
+| [Introduction](/spec/00-introduction/) | Protocol overview, goals, and scope |
+| [Terminology](/spec/01-terminology/) | Definitions and RFC 2119 requirement keywords |
+| [Wire Format](/spec/02-wire-format/) | Binary/text encoding specification |
+| [Message Types](/spec/03-message-types/) | Complete message catalog |
+| [Compression](/spec/04-compression/) | Compression algorithms and mappings |
+| [Session Management](/spec/05-session-management/) | Session lifecycle and state machine |
+| [Security](/spec/06-security/) | Security model and threat mitigations |
 
 ### Guides (`guides/`)
 
@@ -33,8 +33,8 @@ Human-readable documentation for implementers:
 
 | Document | Description |
 |----------|-------------|
-| [quickstart.md](guides/quickstart.md) | 5-minute getting started guide |
-| [proxy.md](guides/proxy.md) | OpenAI-compatible proxy server |
+| [Quickstart](/guides/quickstart/) | 5-minute getting started guide |
+| [Proxy](/guides/proxy/) | OpenAI-compatible proxy server |
 
 ### Reference (`reference/`)
 
@@ -42,9 +42,9 @@ API and configuration reference:
 
 | Document | Description |
 |----------|-------------|
-| [error-codes.md](reference/error-codes.md) | Complete error code reference |
-| [configuration.md](reference/configuration.md) | Configuration options |
-| [abbreviations.md](reference/abbreviations.md) | Key/value abbreviation tables |
+| [Error Codes](/reference/error-codes/) | Complete error code reference |
+| [Configuration](/reference/configuration/) | Configuration options |
+| [Abbreviations](/reference/abbreviations/) | Key/value abbreviation tables |
 
 ### Examples (`examples/`)
 
@@ -60,9 +60,12 @@ Working examples and test vectors:
 
 | Algorithm | Prefix | Use Case |
 |-----------|--------|----------|
-| Token | `#T1\|` | LLM API payloads (~30% savings) |
-| Brotli | `#BR\|` | Large content (>4KB) |
+| TokenNative | `#TK\|` | M2M traffic (~30-35% wire, ~50% binary) |
+| Token | `#T1\|` | Human-readable (~10-20% savings) |
+| Brotli | `#BR\|` | Large content (>1KB) |
 | None | (passthrough) | Small content (<100 bytes) |
+
+*Note: Session mode uses full prefix `#M2M[v3.0]|DATA:` for framing.*
 
 ### Compression Example
 
@@ -70,13 +73,16 @@ Working examples and test vectors:
 Original (68 bytes):
 {"model":"gpt-4o","messages":[{"role":"user","content":"Hello"}]}
 
-Compressed (45 bytes, 34% reduction):
+TokenNative (~40 bytes, transmits BPE token IDs):
+#TK|C|W3sib29kZWw...
+
+Token (45 bytes, human-readable):
 #T1|{"M":"4o","m":[{"r":"u","c":"Hello"}]}
 ```
 
 ## Version History
 
-See [CHANGELOG.md](CHANGELOG.md) for version history.
+See [CHANGELOG](/changelog/) for version history.
 
 ## License
 

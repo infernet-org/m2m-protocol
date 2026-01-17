@@ -174,6 +174,6 @@ export M2M_SECURITY_ENABLED=true
 
 ## Next Steps
 
-- [Proxy Guide](proxy.md) - Detailed proxy configuration
-- [Compression Spec](../spec/04-compression.md) - Algorithm details
-- [Security](../spec/06-security.md) - Security considerations
+- [Proxy Guide](../guides/proxy/) - Detailed proxy configuration
+- [Compression Spec](../spec/04-compression/) - Algorithm details
+- [Security](../spec/06-security/) - Security considerations
