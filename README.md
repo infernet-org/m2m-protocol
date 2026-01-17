@@ -32,8 +32,8 @@ M2M applies **token-native compression** that reduces both bytes AND tokens:
 
 ```
 Original JSON:     68 bytes  →  42 tokens  →  $0.42 per 1M
-M2M TokenNative:   34 bytes  →  N/A        →  ~50% smaller  ✓ Direct token ID transmission
-M2M Token (T1):    45 bytes  →  29 tokens  →  $0.29 per 1M  ✓ 31% cheaper (human-readable)
+M2M TokenNative:   45 bytes  →  N/A        →  ~35% smaller  ✓ Direct token ID transmission
+M2M Token (T1):    55 bytes  →  38 tokens  →  $0.38 per 1M  ✓ 10% cheaper (human-readable)
 ```
 
 ## Architecture
@@ -130,7 +130,7 @@ Four algorithms with self-describing prefixes:
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │ TOKEN NATIVE (Recommended for M2M)                                           │
-│ Best for: Small-medium LLM API JSON (<1KB) — ~50% byte compression           │
+│ Best for: Small-medium LLM API JSON (<1KB) — ~30-35% byte savings            │
 │                                                                              │
 │  #  TK  |  C  |  W3sib29kZWw...                                              │
 │  ▲  ▲   ▲  ▲  ▲  ▲                                                           │
@@ -144,7 +144,7 @@ Four algorithms with self-describing prefixes:
 │  Transmits BPE token IDs directly — tokenizer IS the dictionary              │
 ├──────────────────────────────────────────────────────────────────────────────┤
 │ TOKEN                                                                        │
-│ Best for: Debugging, human-readable — ~20-30% token savings                  │
+│ Best for: Debugging, human-readable — ~10-20% byte savings                   │
 │                                                                              │
 │  #  T1  |  { "M":"4o", "m":[{"r":"u","c":"Hello"}] }                         │
 │  ▲  ▲   ▲  ▲                                                                 │
@@ -281,8 +281,8 @@ M2M automatically selects the optimal algorithm:
 
 | Content | Size | Algorithm | Rationale |
 |---------|------|-----------|-----------|
-| LLM API JSON | <1KB | **TokenNative** | Best M2M compression (50%) |
-| LLM API JSON | <1KB | Token (debug) | Human-readable (20-30% tokens) |
+| LLM API JSON | <1KB | **TokenNative** | Best M2M compression (30-35%) |
+| LLM API JSON | <1KB | Token (debug) | Human-readable (10-20% bytes) |
 | Large content | >1KB | Brotli | Dictionary compression (60-80%) |
 | Small content | <100B | None | Overhead exceeds savings |
 
@@ -303,9 +303,11 @@ println!("Selected: {:?}", algorithm);  // TokenNative for typical API payloads
 
 | Algorithm | Compression | Use Case |
 |-----------|-------------|----------|
-| TokenNative | ~50% bytes | M2M communication |
-| Token (T1) | ~20-30% tokens | Debugging, inspection |
+| TokenNative | ~30-35% wire, ~50% raw | M2M communication |
+| Token (T1) | ~10-20% bytes | Debugging, inspection |
 | Brotli | ~60-80% bytes | Large payloads |
+
+**Note**: TokenNative achieves ~50% compression on raw bytes. The wire format (Base64) adds ~33% overhead for text-safe transport, resulting in ~30-35% net savings. For binary channels (WebSocket binary, QUIC), use raw mode for maximum compression.
 
 ## Supported Tokenizers
 
