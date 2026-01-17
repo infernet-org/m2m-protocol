@@ -156,6 +156,7 @@ pub struct CompressRequest {
 
 /// Compress response
 #[derive(Serialize)]
+#[allow(dead_code)]
 pub struct CompressResponse {
     pub data: String,
     pub algorithm: Algorithm,
