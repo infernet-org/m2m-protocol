@@ -7,10 +7,23 @@
 #   make lint    - Run clippy with strict lints
 #   make clean   - Clean build artifacts
 
-.PHONY: all build check test lint fmt doc clean install bench ci help
+.PHONY: all build check test lint fmt doc clean install bench ci help setup
 
 # Default target
 all: build
+
+# =============================================================================
+# Quick Start
+# =============================================================================
+
+## Full setup: build + download Hydra model
+setup: build model-download
+	@echo ""
+	@echo "✓ Setup complete!"
+	@echo "  Binary: target/release/m2m"
+	@echo "  Model:  ./models/hydra/model.safetensors"
+	@echo ""
+	@echo "Try: cargo test test_load_hydra_model -- --ignored --nocapture"
 
 # =============================================================================
 # Build Targets
@@ -235,9 +248,12 @@ model-verify:
 help:
 	@echo "M2M Protocol - Makefile Commands"
 	@echo ""
+	@echo "Quick Start:"
+	@echo "  make setup        - Build + download Hydra model (recommended)"
+	@echo ""
 	@echo "Build:"
 	@echo "  make build        - Build release binary"
-	@echo "  make build-onnx   - Build with ONNX/Hydra support"
+	@echo "  make build-onnx   - Build with ONNX support (optional)"
 	@echo "  make install      - Install to ~/.cargo/bin"
 	@echo ""
 	@echo "Quality:"

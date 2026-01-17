@@ -67,14 +67,22 @@ M2M Token (T1):    55 bytes  →  38 tokens  →  $0.38 per 1M  ✓ 10% cheaper 
 
 Traditional security operates at the network layer. M2M embeds security **within the protocol itself**, inspecting content at the semantic level before compression.
 
-### Hydra: BitNet Mixture-of-Experts SLM
+### Hydra: Mixture-of-Experts Classifier
 
-The protocol includes [Hydra](https://huggingface.co/infernet/hydra), a specialized Small Language Model:
+The protocol includes [Hydra](https://huggingface.co/infernet/hydra), a specialized classifier for compression routing and security screening:
 
-- **Architecture**: BitNet 1.58-bit quantization with Mixture-of-Experts routing
-- **Size**: <100MB - runs alongside compression with minimal overhead
-- **Latency**: <2ms inference for security classification
-- **Training**: Fine-tuned on prompt injection, jailbreak, and data exfiltration patterns
+- **Architecture**: 4-layer MoE with heterogeneous experts, top-2 routing
+- **Size**: ~38MB safetensors (vocab: 32K, hidden: 192)
+- **Inference**: Native Rust from safetensors — no ONNX/Python required
+- **Tasks**: Compression algorithm selection + security threat detection
+- **Fallback**: Rule-based heuristics when model unavailable
+
+```bash
+# Download Hydra model
+make model-download
+# Or manually:
+huggingface-cli download infernet/hydra --local-dir ./models/hydra
+```
 
 ```rust
 use m2m::{CodecEngine, SecurityScanner};
@@ -219,22 +227,21 @@ Works with vLLM, Ollama, OpenAI, OpenRouter, Azure, or any OpenAI-compatible API
 
 ## Project Status
 
-> **Early Development** — M2M Protocol is under active development and should be considered prototype-level software. The core compression algorithms are functional and tested (148 tests passing), but the API may change, and some features (Hydra neural inference, QUIC transport) are experimental.
+> **Early Development** — M2M Protocol is under active development and should be considered prototype-level software. The core compression algorithms are functional and tested (152 tests passing), but the API may change, and some features are experimental.
 
 **What works well:**
 - TokenNative compression (~30-35% wire savings, ~50% raw)
 - Token (T1) compression for human-readable output
 - Session management with capability negotiation
-- Security scanning (heuristic-based)
+- Security scanning (heuristic + neural inference)
+- **Hydra native inference** from safetensors (no ONNX required)
 
 **What's experimental:**
-- Hydra SLM neural inference (falls back to heuristics)
 - QUIC/HTTP3 transport (limited testing)
 - Multi-language implementations (Rust only currently)
 
 **Contributions welcome!** See our [issues](https://github.com/infernet-org/m2m-protocol/issues) or read [VISION.md](VISION.md) for the roadmap. We especially need help with:
 - Additional language implementations (Python, TypeScript, Go)
-- Hydra model training and ONNX integration
 - Real-world benchmarks and case studies
 - Documentation improvements
 

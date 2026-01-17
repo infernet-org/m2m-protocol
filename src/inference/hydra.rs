@@ -48,6 +48,7 @@ use crate::codec::Algorithm;
 use crate::error::M2MError;
 use crate::error::Result;
 
+use super::bitnet::HydraBitNet;
 use super::tokenizer::SimpleTokenizer;
 
 /// Compression decision from the model
@@ -135,9 +136,14 @@ impl std::fmt::Display for ThreatType {
 }
 
 /// Hydra model wrapper
+///
+/// Supports multiple inference backends:
+/// 1. Native safetensors (preferred) - pure Rust inference
+/// 2. ONNX Runtime (optional) - requires `onnx` feature
+/// 3. Heuristic fallback - rule-based when model unavailable
 #[derive(Clone)]
 pub struct HydraModel {
-    /// Tokenizer for input preparation (used in heuristics)
+    /// Tokenizer for input preparation
     tokenizer: SimpleTokenizer,
     /// Model loaded state
     loaded: bool,
@@ -145,6 +151,8 @@ pub struct HydraModel {
     model_path: Option<String>,
     /// Use heuristics when model unavailable
     use_fallback: bool,
+    /// Native model (safetensors)
+    native_model: Option<HydraBitNet>,
     /// ONNX session (optional, loaded on demand)
     #[cfg(feature = "onnx")]
     session: Option<Arc<ort::session::Session>>,
@@ -164,59 +172,103 @@ impl HydraModel {
             loaded: false,
             model_path: None,
             use_fallback: true,
+            native_model: None,
             #[cfg(feature = "onnx")]
             session: None,
         }
     }
 
-    /// Create model with fallback only (no ONNX)
+    /// Create model with fallback only (no neural inference)
     pub fn fallback_only() -> Self {
         Self {
             tokenizer: SimpleTokenizer::new(),
             loaded: false,
             model_path: None,
             use_fallback: true,
+            native_model: None,
             #[cfg(feature = "onnx")]
             session: None,
         }
     }
 
     /// Load model from file
+    ///
+    /// Supports multiple formats:
+    /// - `.safetensors` - Native Rust inference (preferred)
+    /// - `.onnx` - ONNX Runtime (requires `onnx` feature)
+    ///
+    /// Falls back to heuristics if loading fails.
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let path_str = path.as_ref().to_string_lossy().to_string();
+        let path = path.as_ref();
+        let path_str = path.to_string_lossy().to_string();
 
+        // Try native safetensors first
+        if path_str.ends_with(".safetensors") || path.join("model.safetensors").exists() {
+            let safetensors_path = if path_str.ends_with(".safetensors") {
+                path.to_path_buf()
+            } else {
+                path.join("model.safetensors")
+            };
+
+            match HydraBitNet::load(&safetensors_path) {
+                Ok(model) => {
+                    return Ok(Self {
+                        tokenizer: SimpleTokenizer::new(),
+                        loaded: true,
+                        model_path: Some(safetensors_path.to_string_lossy().to_string()),
+                        use_fallback: false,
+                        native_model: Some(model),
+                        #[cfg(feature = "onnx")]
+                        session: None,
+                    });
+                },
+                Err(e) => {
+                    tracing::warn!("Failed to load native model: {e}, trying other backends");
+                },
+            }
+        }
+
+        // Try ONNX if feature enabled
         #[cfg(feature = "onnx")]
         {
             use ort::session::builder::GraphOptimizationLevel;
             use ort::session::Session;
 
-            // Initialize ONNX Runtime
-            let session = Session::builder()
-                .map_err(|e| M2MError::ModelLoad(e.to_string()))?
-                .with_optimization_level(GraphOptimizationLevel::Level3)
-                .map_err(|e| M2MError::ModelLoad(e.to_string()))?
-                .commit_from_file(&path_str)
-                .map_err(|e| M2MError::ModelLoad(e.to_string()))?;
+            let onnx_path = if path_str.to_ascii_lowercase().ends_with(".onnx") {
+                path.to_path_buf()
+            } else {
+                path.join("model.onnx")
+            };
 
-            Ok(Self {
-                tokenizer: SimpleTokenizer::new(),
-                loaded: true,
-                model_path: Some(path_str),
-                use_fallback: true,
-                session: Some(Arc::new(session)),
-            })
+            if onnx_path.exists() {
+                let session = Session::builder()
+                    .map_err(|e| M2MError::ModelLoad(e.to_string()))?
+                    .with_optimization_level(GraphOptimizationLevel::Level3)
+                    .map_err(|e| M2MError::ModelLoad(e.to_string()))?
+                    .commit_from_file(&onnx_path)
+                    .map_err(|e| M2MError::ModelLoad(e.to_string()))?;
+
+                return Ok(Self {
+                    tokenizer: SimpleTokenizer::new(),
+                    loaded: true,
+                    model_path: Some(onnx_path.to_string_lossy().to_string()),
+                    use_fallback: true,
+                    native_model: None,
+                    session: Some(Arc::new(session)),
+                });
+            }
         }
 
-        #[cfg(not(feature = "onnx"))]
-        {
-            // Without ONNX, just note the path and use fallback
-            Ok(Self {
-                tokenizer: SimpleTokenizer::new(),
-                loaded: false,
-                model_path: Some(path_str),
-                use_fallback: true,
-            })
-        }
+        // Fallback to heuristics
+        Ok(Self {
+            tokenizer: SimpleTokenizer::new(),
+            loaded: false,
+            model_path: Some(path_str),
+            use_fallback: true,
+            native_model: None,
+            #[cfg(feature = "onnx")]
+            session: None,
+        })
     }
 
     /// Check if model is loaded
@@ -241,6 +293,12 @@ impl HydraModel {
 
     /// Predict compression algorithm for content
     pub fn predict_compression(&self, content: &str) -> Result<CompressionDecision> {
+        // Try native model first
+        if let Some(ref model) = self.native_model {
+            return self.predict_compression_native(model, content);
+        }
+
+        // Try ONNX
         #[cfg(feature = "onnx")]
         if let Some(ref session) = self.session {
             return self.predict_compression_onnx(session, content);
@@ -252,6 +310,12 @@ impl HydraModel {
 
     /// Predict security status for content
     pub fn predict_security(&self, content: &str) -> Result<SecurityDecision> {
+        // Try native model first
+        if let Some(ref model) = self.native_model {
+            return self.predict_security_native(model, content);
+        }
+
+        // Try ONNX
         #[cfg(feature = "onnx")]
         if let Some(ref session) = self.session {
             return self.predict_security_onnx(session, content);
@@ -259,6 +323,131 @@ impl HydraModel {
 
         // Use heuristic fallback
         self.predict_security_heuristic(content)
+    }
+
+    /// Native inference for compression
+    #[allow(deprecated)] // Zlib variant is deprecated but still in model output
+    fn predict_compression_native(
+        &self,
+        model: &HydraBitNet,
+        content: &str,
+    ) -> Result<CompressionDecision> {
+        // Tokenize content (simple byte-level, mapped to vocab)
+        let token_ids: Vec<u32> = content
+            .bytes()
+            .map(|b| (b as u32) % model.config().vocab_size as u32)
+            .take(512) // max sequence length
+            .collect();
+
+        if token_ids.is_empty() {
+            return self.predict_compression_heuristic(content);
+        }
+
+        let probs = model.predict_compression(&token_ids);
+
+        // Map output: [NONE, BPE, BROTLI, ZLIB] -> Algorithm
+        // Note: BPE maps to TokenNative in our system
+        let algorithms = [
+            (Algorithm::None, probs[0]),
+            (Algorithm::TokenNative, probs[1]), // BPE -> TokenNative
+            (Algorithm::Brotli, probs[2]),
+            (Algorithm::Zlib, probs[3]),
+        ];
+
+        let (best_algo, confidence) = algorithms
+            .iter()
+            .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(a, c)| (*a, *c))
+            .unwrap_or((Algorithm::None, 0.0));
+
+        Ok(CompressionDecision {
+            algorithm: best_algo,
+            confidence,
+            probabilities: AlgorithmProbs {
+                none: probs[0],
+                token: 0.0,
+                token_native: probs[1],
+                brotli: probs[2],
+                zlib: probs[3],
+                dictionary: 0.0,
+            },
+        })
+    }
+
+    /// Native inference for security
+    fn predict_security_native(
+        &self,
+        model: &HydraBitNet,
+        content: &str,
+    ) -> Result<SecurityDecision> {
+        // Tokenize content
+        let token_ids: Vec<u32> = content
+            .bytes()
+            .map(|b| (b as u32) % model.config().vocab_size as u32)
+            .take(512)
+            .collect();
+
+        if token_ids.is_empty() {
+            return self.predict_security_heuristic(content);
+        }
+
+        let probs = model.predict_security(&token_ids);
+
+        // Output: [SAFE, UNSAFE]
+        let safe_prob = probs[0];
+        let unsafe_prob = probs[1];
+
+        if unsafe_prob > safe_prob {
+            // Run heuristic to determine threat type (model only gives safe/unsafe)
+            let threat_type = self.detect_threat_type(content);
+            Ok(SecurityDecision {
+                safe: false,
+                confidence: unsafe_prob,
+                threat_type: Some(threat_type),
+            })
+        } else {
+            Ok(SecurityDecision {
+                safe: true,
+                confidence: safe_prob,
+                threat_type: None,
+            })
+        }
+    }
+
+    /// Detect specific threat type using heuristics
+    fn detect_threat_type(&self, content: &str) -> ThreatType {
+        let lower = content.to_lowercase();
+
+        // Check injection patterns
+        let injection_keywords = [
+            "ignore previous",
+            "disregard",
+            "new instructions",
+            "system:",
+        ];
+        for kw in injection_keywords {
+            if lower.contains(kw) {
+                return ThreatType::PromptInjection;
+            }
+        }
+
+        // Check jailbreak patterns
+        let jailbreak_keywords = ["dan mode", "developer mode", "jailbreak", "bypass"];
+        for kw in jailbreak_keywords {
+            if lower.contains(kw) {
+                return ThreatType::Jailbreak;
+            }
+        }
+
+        // Check for data exfil
+        let exfil_keywords = ["env", "password", "secret", "api_key", "/etc/"];
+        for kw in exfil_keywords {
+            if lower.contains(kw) {
+                return ThreatType::DataExfil;
+            }
+        }
+
+        ThreatType::Unknown
     }
 
     /// Heuristic-based compression prediction
