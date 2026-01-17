@@ -6,6 +6,9 @@ export default defineConfig({
   integrations: [
     starlight({
       title: 'M2M Protocol',
+      logo: {
+        src: './src/assets/logo.svg',
+      },
       description:
         'High-performance Machine-to-Machine protocol for LLM API communication',
       social: {

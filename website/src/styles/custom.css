@@ -7,7 +7,6 @@
   --sl-color-accent-high: #059669;
 }
 
-/* Dark mode accent adjustments */
 :root[data-theme='dark'] {
   --sl-color-accent-low: #064e3b;
   --sl-color-accent: #10b981;
