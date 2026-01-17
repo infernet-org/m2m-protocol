@@ -4,13 +4,12 @@
 # Run with: cargo deny check
 
 [advisories]
-db-path = "~/.cargo/advisory-db"
-db-urls = ["https://github.com/rustsec/advisory-db"]
 version = 2
+db-path = "~/.cargo/advisory-db"
 ignore = []
 
 [licenses]
-unlicensed = "deny"
+version = 2
 allow = [
     "MIT",
     "Apache-2.0",
@@ -21,8 +20,8 @@ allow = [
     "Zlib",
     "MPL-2.0",
     "Unicode-DFS-2016",
+    "OpenSSL",
 ]
-copyleft = "warn"
 confidence-threshold = 0.8
 
 [[licenses.clarify]]
@@ -34,13 +33,8 @@ license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
 multiple-versions = "warn"
 wildcards = "allow"
 highlight = "all"
-
-# Deny specific crates
 deny = []
-
-# Skip certain crates from duplicate checks
 skip = []
-
 skip-tree = []
 
 [sources]
