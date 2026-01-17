@@ -20,18 +20,22 @@ use std::collections::{HashMap, HashSet};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Provider {
-    /// OpenAI models (GPT-4, GPT-4o, o1, o3) - tokenizer available via tiktoken
+    /// OpenAI models (GPT-5.x, GPT-4.x, o1-o4) - tokenizer available via tiktoken
     OpenAI,
-    /// Meta Llama models (Llama 3.x, 3.1, 3.3)
+    /// Meta Llama models (Llama 4, 3.x)
     Meta,
-    /// Mistral AI models (Mistral, Mixtral, Codestral)
+    /// Mistral AI models (Large, Ministral, Devstral, Codestral)
     Mistral,
-    /// DeepSeek models (v3, r1, coder)
+    /// DeepSeek models (v3.2, R1)
     DeepSeek,
-    /// Qwen models (2.5, coder)
+    /// Qwen models (3, 2.5, coder)
     Qwen,
-    /// Nvidia models (Nemotron - Llama-based)
+    /// Nvidia models (Nemotron 3 - Llama-based)
     Nvidia,
+    /// Google Gemma models (open source, NOT Gemini)
+    Google,
+    /// Allen AI OLMo models (fully open source)
+    AllenAI,
     /// Other/unknown provider
     #[default]
     Other,
@@ -47,6 +51,8 @@ impl Provider {
     /// - `d` = DeepSeek (e.g., `dv3` for deepseek-v3)
     /// - `q` = Qwen (e.g., `qq2572` for qwen-2.5-72b)
     /// - `n` = Nvidia (e.g., `nn70` for nemotron-70b)
+    /// - `g` = Google Gemma (e.g., `gg327` for gemma-3-27b)
+    /// - `a` = Allen AI (e.g., `aolmo` for olmo)
     pub fn prefix(&self) -> &'static str {
         match self {
             Provider::OpenAI => "o",
@@ -55,6 +61,8 @@ impl Provider {
             Provider::DeepSeek => "d",
             Provider::Qwen => "q",
             Provider::Nvidia => "n",
+            Provider::Google => "g",
+            Provider::AllenAI => "a",
             Provider::Other => "_",
         }
     }
@@ -71,6 +79,7 @@ impl Provider {
     /// ```
     pub fn from_model_id(id: &str) -> Self {
         let prefix = id.split('/').next().unwrap_or(id);
+        let model_name = id.split('/').nth(1).unwrap_or("");
         match prefix {
             "openai" => Provider::OpenAI,
             "meta-llama" => Provider::Meta,
@@ -78,6 +87,9 @@ impl Provider {
             "deepseek" => Provider::DeepSeek,
             "qwen" => Provider::Qwen,
             "nvidia" => Provider::Nvidia,
+            // Google Gemma is open source, Gemini is not
+            "google" if model_name.starts_with("gemma") => Provider::Google,
+            "allenai" => Provider::AllenAI,
             _ => Provider::Other,
         }
     }
@@ -91,6 +103,8 @@ impl Provider {
             Provider::DeepSeek => "DeepSeek",
             Provider::Qwen => "Qwen",
             Provider::Nvidia => "Nvidia",
+            Provider::Google => "Google",
+            Provider::AllenAI => "Allen AI",
             Provider::Other => "Other",
         }
     }
