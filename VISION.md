@@ -149,9 +149,9 @@ Caveat: "Unsolved" may be strong; "under-addressed" is more accurate.
 
 | Content Type | Size | Best Algorithm | Expected Savings |
 |--------------|------|----------------|------------------|
-| M2M agent traffic | <10KB | **TokenNative** | 30-35% (wire), 50% (binary) |
-| Human debugging | Any | Token (T1) | 10-20% bytes |
-| Large repetitive | >1KB | Brotli | 70-95% bytes |
+| M2M agent traffic | <10KB | **TokenNative** | ~30% (wire), ~50% (binary) |
+| Human debugging | Any | Token (T1) | 5-20% bytes |
+| Large repetitive | >1KB | Brotli | 60-90% bytes |
 | Small content | <100B | None | N/A (overhead exceeds savings) |
 
 ### 2.2 Cognitive Security (Implementation Status)
@@ -163,22 +163,25 @@ Caveat: "Unsolved" may be strong; "under-addressed" is more accurate.
 │ SECURITY SCANNER STATUS                                        │
 ├────────────────────────────────────────────────────────────────┤
 │                                                                │
-│ IMPLEMENTED:                                                   │
-│ ✓ Hydra native inference from safetensors (NEW)                │
-│ ✓ Prompt injection detection (heuristic + neural)              │
-│ ✓ Jailbreak detection (heuristic + neural)                     │
+│ IMPLEMENTED & WORKING:                                         │
+│ ✓ Heuristic pattern matching (7/7 tests pass)                  │
+│ ✓ Prompt injection detection (heuristic)                       │
+│ ✓ Jailbreak detection (DAN, developer mode)                    │
 │ ✓ Malformed payload detection (null bytes, encoding)           │
 │ ✓ Confidence scoring                                           │
 │ ✓ Blocking mode with threshold                                 │
-│ ✓ Heuristic fallback when model unavailable                    │
+│                                                                │
+│ IMPLEMENTED BUT EXPERIMENTAL:                                  │
+│ ○ Hydra neural security inference (50% accuracy)               │
+│ ○ Needs retraining with balanced security data                 │
 │                                                                │
 │ NOT YET VALIDATED:                                             │
 │ ○ Adversarial robustness testing                               │
 │ ○ Production-scale accuracy validation                         │
 │                                                                │
 │ HONEST ASSESSMENT:                                             │
-│ Native inference works. Model accuracy needs validation.       │
-│ Tokenizer infrastructure complete (Llama3/tiktoken support).   │
+│ Heuristic detection works well for known patterns.             │
+│ Neural inference needs retraining for production use.          │
 │                                                                │
 └────────────────────────────────────────────────────────────────┘
 ```
@@ -417,10 +420,13 @@ If this future materializes, M2M is well-positioned. If it doesn't, M2M is a sol
 | Claim | Evidence | Confidence |
 |-------|----------|------------|
 | Traditional compression increases tokens | Mathematical proof | 99% |
-| TokenNative achieves ~30-35% wire savings | Benchmark: 65-74% of original | 95% |
+| TokenNative achieves ~30% wire savings | Benchmark: 69.5% of original | 95% |
 | TokenNative achieves ~50% raw byte savings | Benchmark: 50.8% of original | 95% |
-| Token (T1) achieves ~10-20% byte savings | Benchmark: 10-21% | 90% |
+| Token (T1) achieves ~5-20% byte savings | Benchmark: 79-97% of original | 85% |
+| Brotli achieves 60-90% savings on large content | Benchmark: 9-63% of original | 95% |
 | LLM APIs price by tokens | Market observation | 99% |
+| Hydra compression routing works | Benchmark: 95%+ accuracy | 90% |
+| Heuristic security detection works | Integration tests: 7/7 pass | 90% |
 
 ### 6.2 Believed Claims (B)
 
@@ -435,7 +441,7 @@ If this future materializes, M2M is well-positioned. If it doesn't, M2M is a sol
 
 | Unknown | Impact | Notes |
 |---------|--------|-------|
-| Hydra neural inference performance | High | Not yet implemented |
+| Hydra security inference accuracy | High | Currently 50%, needs retraining |
 | Security heuristics accuracy at scale | High | No production data |
 | Market adoption timing | High | Speculative |
 | Competitive response | High | Unknown |
@@ -444,10 +450,10 @@ If this future materializes, M2M is well-positioned. If it doesn't, M2M is a sol
 
 | Original Claim | Correction | Evidence |
 |----------------|------------|----------|
-| "~50% compression" (TokenNative wire) | ~30-35% savings | Benchmark shows 65-74% of original |
-| "~20-30% token savings" (Token T1) | ~3-10% token savings | Benchmark shows 3.1% average |
-| "Hydra <2ms latency" | Theoretical, not measured | ONNX inference not implemented |
-| "Hydra <100MB" | Theoretical, not measured | No trained model exists |
+| "~30-35% compression" (TokenNative wire) | ~30% savings | Benchmark shows 69.5% of original |
+| "~20-30% token savings" (Token T1) | ~3% token savings | Benchmark shows 3.1% average |
+| "Hydra security >95% accuracy" | ~50% accuracy | Empirical validation: 4/8 correct |
+| ">95% injection detection" | Heuristic available | Neural inference experimental |
 
 ---
 
@@ -456,13 +462,15 @@ If this future materializes, M2M is well-positioned. If it doesn't, M2M is a sol
 M2M Protocol is a technically sound compression protocol with a coherent vision for agent-to-agent communication. The core compression mechanisms work as designed. The security architecture is defined but partially implemented.
 
 **What we're confident about:**
-- TokenNative compression achieves meaningful savings (~30-35% wire, ~50% raw)
-- The protocol architecture is sound (148 tests pass)
+- TokenNative compression achieves meaningful savings (~30% wire, ~50% raw)
+- The protocol architecture is sound (146 tests pass)
 - The wire format is self-describing and extensible
+- Heuristic security detection works for known patterns
+- Hydra compression routing is functional
 
 **What remains unproven:**
 - Market demand for agent compression protocols
-- Hydra neural inference (architecture only)
+- Hydra security inference (50% accuracy, needs retraining)
 - Security effectiveness against novel attacks
 - Adoption potential
 

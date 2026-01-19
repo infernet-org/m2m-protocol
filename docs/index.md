@@ -64,11 +64,11 @@ Traditional security operates at network or application layers. M2M embeds secur
 A specialized classifier designed for protocol-embedded inference:
 
 - **Architecture**: 4-layer MoE, top-2 routing (vocab: 32K, hidden: 192)
-- **Size**: ~38MB safetensors — native Rust inference, no Python/ONNX required
+- **Size**: ~37MB safetensors — native Rust inference, no Python/ONNX required
 - **Tasks**: Compression routing (4-class) + Security screening (2-class)
-- **Fallback**: Heuristic rules when model unavailable
+- **Status**: Compression routing functional; security screening experimental
 
-`[Pattern matching: Available]` `[Neural inference: Available]`
+`[Pattern matching: Available]` `[Neural inference: Experimental]`
 
 ### What It Detects
 

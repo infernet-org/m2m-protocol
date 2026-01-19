@@ -60,7 +60,7 @@ Working examples and test vectors:
 | Algorithm | Prefix | Use Case |
 |-----------|--------|----------|
 | TokenNative | `#TK\|` | M2M traffic (~30-35% wire, ~50% binary) |
-| Token | `#T1\|` | Human-readable (~10-20% savings) |
+| Token | `#T1\|` | Human-readable (~5-20% savings) |
 | Brotli | `#BR\|` | Large content (>1KB) |
 | None | (passthrough) | Small content (<100 bytes) |
 

@@ -11,9 +11,9 @@ M2M Protocol supports multiple compression algorithms optimized for different co
 
 | Algorithm | Tag | Best For | Typical Savings |
 |-----------|-----|----------|-----------------|
-| TokenNative | `TK` | Small-medium LLM API (<1KB) | 50-60% |
-| Token | `T1` | LLM API payloads (fallback) | 25-40% |
-| Brotli | `BR` | Large content (>1KB) | 60-80% |
+| TokenNative | `TK` | Small-medium LLM API (<1KB) | ~30% wire, ~50% raw |
+| Token | `T1` | Human-readable debugging | 5-20% bytes |
+| Brotli | `BR` | Large content (>1KB) | 60-90% |
 | Dictionary | `DI` | Repetitive patterns | 20-30% |
 | None | - | Small content (<100B) | 0% |
 
