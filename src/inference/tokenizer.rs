@@ -289,13 +289,107 @@ impl HydraTokenizer for TiktokenTokenizer {
 }
 
 // ============================================================================
-// FallbackTokenizer - Simple byte-level tokenizer
+// HydraByteTokenizer - Byte-level tokenizer matching training
+// ============================================================================
+
+/// Byte-level tokenizer that matches Hydra's training tokenizer.
+///
+/// Uses the same encoding as the Python `SimpleTokenizer`:
+/// - PAD = 0, EOS = 1, BOS = 2
+/// - Byte values 0-255 map to token IDs 3-258
+/// - Sequences are wrapped with BOS and EOS tokens
+#[derive(Debug, Clone)]
+pub struct HydraByteTokenizer {
+    /// Maximum sequence length (default 512)
+    max_length: usize,
+}
+
+impl HydraByteTokenizer {
+    /// PAD token ID
+    pub const PAD_TOKEN_ID: u32 = 0;
+    /// EOS token ID
+    pub const EOS_TOKEN_ID: u32 = 1;
+    /// BOS token ID
+    pub const BOS_TOKEN_ID: u32 = 2;
+    /// Offset for byte values (first 3 IDs reserved for special tokens)
+    pub const BYTE_OFFSET: u32 = 3;
+
+    /// Create new Hydra byte tokenizer with default max length (512).
+    #[must_use]
+    pub fn new() -> Self {
+        Self { max_length: 512 }
+    }
+
+    /// Create tokenizer with custom max length.
+    #[must_use]
+    pub fn with_max_length(max_length: usize) -> Self {
+        Self { max_length }
+    }
+}
+
+impl Default for HydraByteTokenizer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl HydraTokenizer for HydraByteTokenizer {
+    fn encode(&self, text: &str) -> Result<Vec<u32>> {
+        let mut tokens = Vec::with_capacity(self.max_length.min(text.len() + 2));
+
+        // BOS token
+        tokens.push(Self::BOS_TOKEN_ID);
+
+        // Encode bytes with offset (leave room for EOS)
+        let max_content = self.max_length.saturating_sub(2);
+        for byte in text.bytes().take(max_content) {
+            tokens.push((byte as u32) + Self::BYTE_OFFSET);
+        }
+
+        // EOS token
+        tokens.push(Self::EOS_TOKEN_ID);
+
+        Ok(tokens)
+    }
+
+    fn decode(&self, tokens: &[u32]) -> Result<String> {
+        let bytes: Vec<u8> = tokens
+            .iter()
+            .filter_map(|&t| {
+                // Skip special tokens, decode byte tokens
+                if t >= Self::BYTE_OFFSET && t < Self::BYTE_OFFSET + 256 {
+                    Some((t - Self::BYTE_OFFSET) as u8)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        String::from_utf8(bytes)
+            .map_err(|e| M2MError::Tokenizer(format!("Invalid UTF-8 in tokens: {e}")))
+    }
+
+    fn vocab_size(&self) -> usize {
+        // 3 special tokens + 256 byte values = 259, but model uses 32000
+        32000
+    }
+
+    fn tokenizer_type(&self) -> TokenizerType {
+        TokenizerType::Fallback // Use same type for compatibility
+    }
+}
+
+// ============================================================================
+// FallbackTokenizer - Simple byte-level tokenizer (legacy)
 // ============================================================================
 
 /// Fallback byte-level tokenizer.
 ///
 /// Used when no proper tokenizer is available. Maps bytes directly to token IDs.
 /// This is NOT recommended for production use but ensures Hydra can always run.
+///
+/// **Note**: For Hydra inference, prefer [`HydraByteTokenizer`] which matches
+/// the training tokenizer exactly.
 #[derive(Debug, Clone, Default)]
 pub struct FallbackTokenizer {
     vocab_size: usize,

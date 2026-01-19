@@ -66,7 +66,8 @@ pub use hydra::{CompressionDecision, HydraModel, SecurityDecision, ThreatType};
 // Tokenizer exports
 pub use tokenizer::{
     boxed, load_tokenizer, load_tokenizer_by_type, BoxedTokenizer, FallbackTokenizer,
-    HydraTokenizer, Llama3Tokenizer, TiktokenTokenizer, TokenizerType, MAX_SEQUENCE_LENGTH,
+    HydraByteTokenizer, HydraTokenizer, Llama3Tokenizer, TiktokenTokenizer, TokenizerType,
+    MAX_SEQUENCE_LENGTH,
 };
 
 /// Model version

@@ -30,11 +30,11 @@ use crate::error::{M2MError, Result};
 /// Model configuration derived from actual weights
 #[derive(Debug, Clone)]
 pub struct HydraConfig {
-    /// Vocabulary size (256 for Hydra v1.0 - byte-level)
+    /// Vocabulary size (32000 for Hydra - uses sentencepiece-like tokenizer)
     pub vocab_size: usize,
-    /// Hidden dimension (256 for Hydra)
+    /// Hidden dimension (192 for Hydra)
     pub hidden_size: usize,
-    /// Number of MoE layers (6 for Hydra)
+    /// Number of MoE layers (4 for Hydra)
     pub num_layers: usize,
     /// Number of experts per layer (4 for Hydra)
     pub num_experts: usize,
@@ -44,11 +44,11 @@ pub struct HydraConfig {
 
 impl Default for HydraConfig {
     fn default() -> Self {
-        // Values from actual config.json on HuggingFace (infernet/hydra)
+        // Values from actual model.safetensors inspection (not config.json which is wrong)
         Self {
-            vocab_size: 256,
-            hidden_size: 256,
-            num_layers: 6,
+            vocab_size: 32000,
+            hidden_size: 192,
+            num_layers: 4,
             num_experts: 4,
             top_k_experts: 2,
         }
@@ -389,6 +389,55 @@ mod tests {
         assert!(probs[2] > probs[1] && probs[1] > probs[0]);
     }
 
+    /// Inspect model tensors without loading
+    /// Run with: cargo test inspect_model_tensors -- --ignored --nocapture
+    #[test]
+    #[ignore = "requires model file"]
+    fn inspect_model_tensors() {
+        let paths = [
+            "./models/hydra/model.safetensors",
+            "../models/hydra/model.safetensors",
+        ];
+
+        let Some(path) = paths.iter().find(|p| std::path::Path::new(p).exists()) else {
+            println!("Model not found");
+            return;
+        };
+
+        let data = std::fs::read(path).expect("read");
+        let tensors = SafeTensors::deserialize(&data).expect("parse");
+
+        let mut names: Vec<_> = tensors.names().into_iter().collect();
+        names.sort();
+
+        println!("\nModel: {path}");
+        println!("Total tensors: {}\n", names.len());
+        for name in &names {
+            let t = tensors.tensor(name).unwrap();
+            println!("  {}: {:?}", name, t.shape());
+        }
+
+        // Infer structure
+        let num_layers = names
+            .iter()
+            .filter(|n| n.contains("layers.") && n.contains(".gate."))
+            .count();
+        let num_experts = names
+            .iter()
+            .filter(|n| n.starts_with("layers.0.experts."))
+            .filter(|n| n.contains(".0.weight"))
+            .count();
+
+        if let Some(embed) = names.iter().find(|n| n.contains("embed")) {
+            let t = tensors.tensor(embed).unwrap();
+            println!("\nInferred config:");
+            println!("  vocab_size: {}", t.shape()[0]);
+            println!("  hidden_size: {}", t.shape()[1]);
+        }
+        println!("  num_layers: {}", num_layers);
+        println!("  num_experts: {}", num_experts);
+    }
+
     #[test]
     fn test_linear() {
         let weight = Array2::from_shape_vec((2, 3), vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]).unwrap();
@@ -451,7 +500,7 @@ mod tests {
         println!("Loading model from: {path}");
         let model = HydraBitNet::load(path).expect("Failed to load model");
 
-        // Verify config
+        // Verify config matches actual model
         let config = model.config();
         assert_eq!(config.vocab_size, 32000);
         assert_eq!(config.hidden_size, 192);
