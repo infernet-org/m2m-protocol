@@ -175,7 +175,6 @@ pub mod error;
 pub mod inference;
 pub mod models;
 pub mod protocol;
-pub mod proxy;
 pub mod security;
 pub mod server;
 pub mod tokenizer;
@@ -188,7 +187,6 @@ pub use error::{M2MError, Result};
 pub use inference::{HydraModel, SecurityDecision};
 pub use models::{ModelCard, ModelRegistry, Provider};
 pub use protocol::{Capabilities, Message, Session, SessionState};
-pub use proxy::{ProxyConfig, ProxyServer, ProxyStats};
 pub use security::{ScanResult, SecurityScanner};
 pub use server::{AppState, ServerConfig};
 pub use tokenizer::{

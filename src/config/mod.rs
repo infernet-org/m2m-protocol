@@ -3,7 +3,6 @@
 //! Supports configuration from:
 //! - TOML config files
 //! - Environment variables
-//! - CLI arguments (for proxy)
 
 use std::path::PathBuf;
 
@@ -14,10 +13,6 @@ use crate::error::{M2MError, Result};
 /// Main configuration struct
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
-    /// Proxy configuration
-    #[serde(default)]
-    pub proxy: ProxyConfig,
-
     /// Compression configuration
     #[serde(default)]
     pub compression: CompressionConfig,
@@ -42,19 +37,6 @@ impl Config {
     pub fn from_env() -> Self {
         let mut config = Self::default();
 
-        // Proxy settings
-        if let Ok(upstream) = std::env::var("M2M_PROXY_UPSTREAM") {
-            config.proxy.upstream = upstream;
-        }
-        if let Ok(port) = std::env::var("M2M_PROXY_PORT") {
-            if let Ok(port) = port.parse() {
-                config.proxy.port = port;
-            }
-        }
-        if let Ok(host) = std::env::var("M2M_PROXY_HOST") {
-            config.proxy.host = host;
-        }
-
         // Compression settings
         if let Ok(val) = std::env::var("M2M_COMPRESS_MIN_TOKENS") {
             if let Ok(val) = val.parse() {
@@ -67,71 +49,10 @@ impl Config {
 
     /// Merge with another config (other takes precedence)
     pub fn merge(self, other: Self) -> Self {
-        // For now, just use other's values if they differ from defaults
         Self {
-            proxy: ProxyConfig {
-                upstream: if other.proxy.upstream != ProxyConfig::default().upstream {
-                    other.proxy.upstream
-                } else {
-                    self.proxy.upstream
-                },
-                port: if other.proxy.port != ProxyConfig::default().port {
-                    other.proxy.port
-                } else {
-                    self.proxy.port
-                },
-                host: if other.proxy.host != ProxyConfig::default().host {
-                    other.proxy.host
-                } else {
-                    self.proxy.host
-                },
-                ..other.proxy
-            },
             compression: other.compression,
             models: other.models,
         }
-    }
-}
-
-/// Proxy server configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProxyConfig {
-    /// Upstream API URL (e.g., https://api.openai.com)
-    pub upstream: String,
-
-    /// Port to listen on
-    pub port: u16,
-
-    /// Host to bind to
-    pub host: String,
-
-    /// Request timeout in seconds
-    pub timeout_secs: u64,
-
-    /// Enable verbose logging
-    pub verbose: bool,
-
-    /// Maximum request body size in bytes
-    pub max_body_size: usize,
-}
-
-impl Default for ProxyConfig {
-    fn default() -> Self {
-        Self {
-            upstream: "https://api.openai.com".to_string(),
-            port: 8080,
-            host: "127.0.0.1".to_string(),
-            timeout_secs: 60,
-            verbose: false,
-            max_body_size: 10 * 1024 * 1024, // 10 MB
-        }
-    }
-}
-
-impl ProxyConfig {
-    /// Get the full listen address
-    pub fn listen_addr(&self) -> String {
-        format!("{}:{}", self.host, self.port)
     }
 }
 
@@ -204,28 +125,12 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = Config::default();
-        assert_eq!(config.proxy.port, 8080);
-        assert_eq!(config.proxy.upstream, "https://api.openai.com");
         assert!(config.compression.abbreviate_keys);
-    }
-
-    #[test]
-    fn test_proxy_listen_addr() {
-        let config = ProxyConfig::default();
-        assert_eq!(config.listen_addr(), "127.0.0.1:8080");
     }
 
     #[test]
     fn test_config_from_toml() {
         let toml = r#"
-            [proxy]
-            upstream = "https://api.anthropic.com"
-            port = 9090
-            host = "0.0.0.0"
-            timeout_secs = 60
-            verbose = false
-            max_body_size = 10485760
-
             [compression]
             enabled = true
             min_tokens = 50
@@ -237,8 +142,6 @@ mod tests {
         "#;
 
         let config: Config = toml::from_str(toml).unwrap();
-        assert_eq!(config.proxy.upstream, "https://api.anthropic.com");
-        assert_eq!(config.proxy.port, 9090);
         assert_eq!(config.compression.min_tokens, 50);
         assert!(config.compression.enabled);
     }

@@ -8,7 +8,7 @@
 //!
 //! ```text
 //! ┌─────────────────────────────────────────┐
-//! │              ProxyServer                 │
+//! │              M2M Server                  │
 //! │         (Transport-Agnostic)            │
 //! └──────────────────┬──────────────────────┘
 //!                    │
@@ -23,17 +23,10 @@
 //! # Usage
 //!
 //! ```rust,ignore
-//! use m2m::transport::{TransportKind, QuicConfig};
-//! use m2m::proxy::{ProxyServer, ProxyConfig};
+//! use m2m::transport::{TransportKind, QuicTransportConfig};
 //!
-//! let config = ProxyConfig {
-//!     transport: TransportKind::Quic,
-//!     quic: Some(QuicConfig::development()),
-//!     ..Default::default()
-//! };
-//!
-//! let server = ProxyServer::new(config);
-//! server.run().await?;
+//! // Select transport for M2M protocol server
+//! let transport = TransportKind::Tcp;  // or Quic, Both
 //! ```
 
 mod config;
@@ -49,7 +42,7 @@ use axum::Router;
 use std::future::Future;
 use std::pin::Pin;
 
-/// Transport kind selection for the proxy server.
+/// Transport kind selection for the M2M server.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum TransportKind {
     /// Traditional TCP with HTTP/1.1 (default)
@@ -94,7 +87,7 @@ impl std::str::FromStr for TransportKind {
 /// Transport trait for pluggable network backends.
 ///
 /// Implementations handle the low-level network protocol while
-/// the proxy server remains transport-agnostic.
+/// the server remains transport-agnostic.
 pub trait Transport: Send + Sync {
     /// Serve the given Axum router on this transport.
     ///
