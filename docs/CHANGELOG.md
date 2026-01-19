@@ -38,11 +38,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Configurable blocking/monitoring modes
   - Confidence threshold tuning
 
-- **OpenAI-Compatible Proxy**
-  - Drop-in proxy for any OpenAI-compatible endpoint
-  - Transparent request/response compression
-  - SSE streaming support
-  - Statistics endpoint
+- **M2M Protocol Server**
+  - HTTP server for M2M protocol endpoints
+  - Compression and decompression APIs
+  - Security scanning integration
 
 - **Session Management**
   - Capability negotiation
@@ -62,9 +61,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - RFC-style protocol specification
 - Quick start guide
-- Proxy configuration guide
 - Complete abbreviation reference
 - Wire format examples
+
+### Removed
+
+- **Proxy Module** - The OpenAI-compatible reverse proxy was removed as M2M is an agent-to-agent protocol. Compressing to non-M2M endpoints defeats the purpose of the protocol.
 
 ## [0.2.0] - 2026-01-16
 

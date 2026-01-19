@@ -210,20 +210,22 @@ println!("{}", result.data);  // #T1|{"M":"4o","m":[{"r":"u","c":"Hello"}]}
 let original = engine.decompress(&result.data)?;
 ```
 
-### As a Proxy
+### As a Library
 
-Drop-in replacement for any OpenAI-compatible endpoint:
+```rust
+use m2m::{CodecEngine, Algorithm, SecurityScanner};
 
-```bash
-# Start proxy with security scanning enabled
-m2m proxy --port 8080 --upstream http://localhost:11434/v1 --security
+// Security scanning before compression
+let scanner = SecurityScanner::new().with_blocking(0.8);
+let scan = scanner.scan(content)?;
 
-# Use normally — compression and security are transparent
-curl http://localhost:8080/v1/chat/completions \
-  -d '{"model":"llama3.2","messages":[{"role":"user","content":"Hello"}]}'
+if scan.safe {
+    // Compress for M2M agent-to-agent transmission
+    let engine = CodecEngine::new();
+    let result = engine.compress(content, Algorithm::TokenNative)?;
+    // Send compressed data to other M2M-speaking agent
+}
 ```
-
-Works with vLLM, Ollama, OpenAI, OpenRouter, Azure, or any OpenAI-compatible API.
 
 ## Project Status
 
@@ -326,7 +328,6 @@ println!("Selected: {:?}", algorithm);  // TokenNative for typical API payloads
 |--------|-------|
 | Compression latency | < 1ms |
 | Security scan (Hydra) | < 2ms |
-| Proxy overhead | < 2ms |
 | Memory footprint | < 50MB |
 
 | Algorithm | Compression | Use Case |
@@ -363,27 +364,22 @@ m2m scan --block-threshold 0.8 "..."                      # With blocking
 # Analysis
 m2m analyze '{"messages":[...]}'                          # Recommend algorithm
 
-# Proxy
-m2m proxy --port 8080 --upstream http://...               # Start proxy
-m2m proxy --port 8080 --upstream http://... --security    # With security scanning
+# Server (M2M protocol endpoints)
+m2m server --port 3000                                    # Start server
+m2m server --port 3000 --blocking                         # With security blocking
 ```
 
 ## Configuration
 
 ```bash
 # Environment
-M2M_SERVER_PORT=8080
-M2M_UPSTREAM_URL=http://localhost:11434/v1
+M2M_SERVER_PORT=3000
 M2M_SECURITY_ENABLED=true
 M2M_SECURITY_BLOCK_THRESHOLD=0.8
 ```
 
 ```toml
 # ~/.m2m/config.toml
-[proxy]
-listen = "127.0.0.1:8080"
-upstream = "http://localhost:11434/v1"
-
 [compression]
 default_algorithm = "token-native"
 brotli_threshold = 1024
@@ -399,31 +395,28 @@ block_threshold = 0.8
 - [Wire Format](docs/spec/02-wire-format.md)
 - [Compression Algorithms](docs/spec/04-compression.md)
 - [Security](docs/spec/06-security.md)
-- [Proxy Guide](docs/guides/proxy.md)
 
 ## Experimental Features
 
 ### QUIC/HTTP3 Transport
 
-Modern transport with 0-RTT, no head-of-line blocking:
+Modern transport with 0-RTT, no head-of-line blocking — available for M2M server:
 
 ```bash
-m2m proxy --port 8080 --upstream http://localhost:11434/v1 \
-          --transport both --quic-port 8443
+m2m server --port 3000 --transport quic
 ```
 
 > **Note**: QUIC requires TLS certificates. Functional but limited E2E test coverage.
 
-### Hydra ONNX Inference
+### Hydra Native Inference
 
-Full neural inference (vs heuristics) for algorithm routing:
+Full neural inference for algorithm routing and security:
 
 ```bash
 huggingface-cli download infernet/hydra --local-dir ./models/hydra
-cargo build --release --features onnx
 ```
 
-> **Note**: ONNX tensor integration in progress. Heuristics achieve similar results.
+> **Note**: Native Rust inference from safetensors — no ONNX/Python required.
 
 ## License
 

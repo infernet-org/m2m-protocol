@@ -23,28 +23,12 @@ Default location: `~/.m2m/config.toml`
 ```toml
 # M2M Protocol Configuration
 
-[proxy]
+[server]
 # Address to listen on
-listen = "127.0.0.1:8080"
-
-# Upstream LLM API endpoint
-upstream = "http://localhost:11434/v1"
-
-# API key for upstream (optional)
-api_key = ""
+listen = "127.0.0.1:3000"
 
 # Request timeout in seconds
 timeout = 30
-
-[proxy.compression]
-# Compress outgoing requests
-requests = true
-
-# Compress incoming responses
-responses = true
-
-# Preferred algorithm (token, brotli, auto)
-algorithm = "auto"
 
 [security]
 # Enable security scanning
@@ -78,10 +62,8 @@ json = false
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `M2M_SERVER_PORT` | Proxy listen port | `8080` |
-| `M2M_SERVER_HOST` | Proxy listen address | `127.0.0.1` |
-| `M2M_UPSTREAM_URL` | Upstream API URL | - |
-| `M2M_API_KEY` | API key for upstream | - |
+| `M2M_SERVER_PORT` | Server listen port | `3000` |
+| `M2M_SERVER_HOST` | Server listen address | `127.0.0.1` |
 | `M2M_SECURITY_ENABLED` | Enable security scanning | `true` |
 | `M2M_SECURITY_BLOCKING` | Block unsafe content | `true` |
 | `M2M_BLOCK_THRESHOLD` | Security confidence threshold | `0.8` |
@@ -97,11 +79,9 @@ json = false
 m2m server [OPTIONS]
 
 Options:
-  -p, --port <PORT>          Listen port [default: 8080]
+  -p, --port <PORT>          Listen port [default: 3000]
   -h, --host <HOST>          Listen address [default: 127.0.0.1]
-  -u, --upstream <URL>       Upstream API URL [required]
-  -k, --api-key <KEY>        API key for upstream
-  --security                  Enable security scanning
+  --blocking                  Enable security blocking
   --threshold <FLOAT>        Security threshold [default: 0.8]
   --timeout <SECONDS>        Request timeout [default: 30]
   --log-level <LEVEL>        Log level [default: info]
@@ -146,30 +126,14 @@ Options:
   --json                     JSON output format
 ```
 
-## Proxy Configuration Details
+## Server Configuration Details
 
 ### Listen Address
 
 ```toml
-[proxy]
-listen = "127.0.0.1:8080"  # Local only
-listen = "0.0.0.0:8080"    # All interfaces (caution!)
-```
-
-### Upstream Configuration
-
-```toml
-[proxy]
-# Local Ollama
-upstream = "http://localhost:11434/v1"
-
-# OpenAI
-upstream = "https://api.openai.com/v1"
-api_key = "sk-..."
-
-# Azure OpenAI
-upstream = "https://YOUR-RESOURCE.openai.azure.com/openai/deployments/YOUR-DEPLOYMENT"
-api_key = "..."
+[server]
+listen = "127.0.0.1:3000"  # Local only
+listen = "0.0.0.0:3000"    # All interfaces (caution!)
 ```
 
 ## Security Configuration

@@ -166,13 +166,22 @@ M2M Protocol is infrastructure for ERA 3 and beyond — where autonomous agents 
 # Install
 cargo install --git https://github.com/infernet-org/m2m-protocol
 
-# Start proxy
-m2m proxy --port 8080 --upstream http://localhost:11434/v1
+# Use as a library for agent-to-agent communication
+# Compression and security are embedded in the protocol
+```
 
-# Agents communicate through M2M — compression and security are transparent
-curl http://localhost:8080/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{"model": "llama3.2", "messages": [{"role": "user", "content": "Hello"}]}'
+```rust
+use m2m::{CodecEngine, Algorithm, SecurityScanner};
+
+// Security scanning before compression
+let scanner = SecurityScanner::new().with_blocking(0.8);
+let scan = scanner.scan(content)?;
+
+if scan.safe {
+    // Compress for M2M transmission
+    let engine = CodecEngine::new();
+    let result = engine.compress(content, Algorithm::TokenNative)?;
+}
 ```
 
 ## License

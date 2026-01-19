@@ -107,42 +107,25 @@ if !result.safe {
 }
 ```
 
-## Running the Proxy
+## Running the Server
 
-### Start Proxy
-
-```bash
-# Forward to local Ollama
-m2m server --port 8080 --upstream http://localhost:11434/v1
-
-# Forward to OpenAI
-m2m server --port 8080 --upstream https://api.openai.com/v1 --api-key $OPENAI_API_KEY
-```
-
-### Use with OpenAI SDK
-
-```python
-from openai import OpenAI
-
-# Point to M2M proxy instead of OpenAI directly
-client = OpenAI(base_url="http://localhost:8080/v1")
-
-response = client.chat.completions.create(
-    model="gpt-4o",
-    messages=[{"role": "user", "content": "Hello!"}]
-)
-```
-
-### Check Proxy Stats
+### Start M2M Protocol Server
 
 ```bash
-curl http://localhost:8080/stats
-# {
-#   "requests_total": 42,
-#   "bytes_in": 12345,
-#   "bytes_out": 8765,
-#   "compression_ratio": 0.71
-# }
+# Start M2M protocol server for agent-to-agent communication
+m2m server --port 3000
+
+# With security scanning enabled
+m2m server --port 3000 --blocking --threshold 0.8
+```
+
+### Use with HTTP Client
+
+```bash
+# Compress and send via M2M protocol
+curl http://localhost:3000/v1/compress \
+  -H "Content-Type: application/json" \
+  -d '{"content": "{\"model\":\"gpt-4o\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}]}"}'
 ```
 
 ## Configuration
@@ -152,10 +135,6 @@ curl http://localhost:8080/stats
 Create `~/.m2m/config.toml`:
 
 ```toml
-[proxy]
-listen = "127.0.0.1:8080"
-upstream = "http://localhost:11434/v1"
-
 [security]
 enabled = true
 threshold = 0.8
@@ -174,6 +153,5 @@ export M2M_SECURITY_ENABLED=true
 
 ## Next Steps
 
-- [Proxy Guide](../guides/proxy/) - Detailed proxy configuration
 - [Compression Spec](../spec/04-compression/) - Algorithm details
 - [Security](../spec/06-security/) - Security considerations

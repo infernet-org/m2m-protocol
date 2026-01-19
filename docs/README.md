@@ -34,7 +34,6 @@ Human-readable documentation for implementers:
 | Document | Description |
 |----------|-------------|
 | [Quickstart](/guides/quickstart/) | 5-minute getting started guide |
-| [Proxy](/guides/proxy/) | OpenAI-compatible proxy server |
 
 ### Reference (`reference/`)
 
