@@ -36,8 +36,9 @@ serde_json = "1.0"
 thiserror = "1.0"
 anyhow = "1.0"
 
-# Tokenizer (OpenAI BPE)
-tiktoken-rs = "0.9"
+# Tokenizers
+tiktoken-rs = "0.9"  # OpenAI BPE (cl100k, o200k)
+tokenizers = { version = "0.21", default-features = false, features = ["onig"] }  # HuggingFace (Llama 3, etc.)
 
 # Compile-time hash maps
 phf = { version = "0.11", features = ["macros"] }
@@ -68,9 +69,6 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
 # === NEW: M2M Protocol Dependencies ===
-
-# ONNX Runtime for Hydra ML inference (optional - requires Rust 1.85+)
-ort = { version = "2.0.0-rc", default-features = false, features = ["load-dynamic"], optional = true }
 
 # Compression codecs
 brotli = "7.0"
@@ -135,10 +133,6 @@ debug = true
 
 [features]
 default = []
-# Enable ONNX Runtime for ML inference (requires Rust 1.85+ due to ort crate)
-onnx = ["dep:ort"]
-# CPU-only inference (no CUDA)
-cpu-only = []
 
 # =============================================================================
 # Lints Configuration
@@ -174,7 +168,6 @@ cast_lossless = "allow"                # u8 to u32 is fine
 unnecessary_wraps = "allow"            # Result<T> for consistency
 redundant_closure_for_method_calls = "allow"  # Clearer in some contexts
 only_used_in_recursion = "allow"       # False positives with &self in recursive fns
-self_only_used_in_recursion = "allow"  # Same lint, different name in newer clippy
 unused_self = "allow"                  # Preparation for future use
 manual_let_else = "allow"              # match is sometimes clearer
 return_self_not_must_use = "allow"     # Builder pattern methods

@@ -1,279 +1,510 @@
-//! Simple tokenizer for model input preparation.
+//! Tokenizer infrastructure for Hydra model.
 //!
-//! Provides basic BPE-like tokenization for the Hydra model.
-//! This is a simplified tokenizer - for production use with
-//! specific LLM tokenizers, use tiktoken or similar.
+//! Provides a unified trait for tokenization with multiple backend implementations:
+//!
+//! - [`Llama3Tokenizer`]: HuggingFace Tokenizers format (Llama 3, Mistral, etc.)
+//! - [`TiktokenTokenizer`]: OpenAI tiktoken format (cl100k, o200k)
+//! - [`FallbackTokenizer`]: Simple byte-level fallback
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use m2m::inference::{HydraTokenizer, Llama3Tokenizer, TokenizerType};
+//!
+//! // Load Llama 3 tokenizer from file
+//! let tokenizer = Llama3Tokenizer::from_file("./models/hydra/tokenizer.json")?;
+//!
+//! // Encode text to token IDs
+//! let tokens = tokenizer.encode("Hello, world!")?;
+//!
+//! // Get vocab size (128K for Llama 3)
+//! assert_eq!(tokenizer.vocab_size(), 128000);
+//! ```
 
-use std::collections::HashMap;
+use std::path::Path;
+use std::sync::Arc;
 
-use crate::error::Result;
+use crate::error::{M2MError, Result};
 
-/// Simple character-level tokenizer with basic BPE merges
-#[derive(Clone)]
-pub struct SimpleTokenizer {
-    /// Vocabulary mapping (token -> id)
-    vocab: HashMap<String, u32>,
-    /// Reverse vocabulary (id -> token)
-    reverse_vocab: HashMap<u32, String>,
-    /// Special tokens
-    special_tokens: SpecialTokens,
-    /// Maximum sequence length
-    max_length: usize,
+// Re-export tiktoken for OpenAI tokenizers
+use tiktoken_rs::{cl100k_base, o200k_base, CoreBPE};
+
+// HuggingFace tokenizers
+use tokenizers::Tokenizer;
+
+/// Maximum sequence length for Hydra input
+pub const MAX_SEQUENCE_LENGTH: usize = 512;
+
+/// Tokenizer type identifier
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TokenizerType {
+    /// Llama 3 tokenizer (128K vocab, HuggingFace format)
+    Llama3,
+    /// OpenAI o200k_base (200K vocab, tiktoken)
+    O200kBase,
+    /// OpenAI cl100k_base (100K vocab, tiktoken)
+    Cl100kBase,
+    /// Fallback byte-level tokenizer
+    Fallback,
 }
 
-/// Special token IDs
-#[derive(Debug, Clone)]
-pub struct SpecialTokens {
-    pub pad: u32,
-    pub unk: u32,
-    pub bos: u32,
-    pub eos: u32,
-}
-
-impl Default for SpecialTokens {
-    fn default() -> Self {
-        Self {
-            pad: 0,
-            unk: 1,
-            bos: 2,
-            eos: 3,
-        }
-    }
-}
-
-impl Default for SimpleTokenizer {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl SimpleTokenizer {
-    /// Create new tokenizer with default vocabulary
-    pub fn new() -> Self {
-        let mut vocab = HashMap::new();
-        let mut reverse_vocab = HashMap::new();
-
-        // Special tokens
-        vocab.insert("<pad>".to_string(), 0);
-        vocab.insert("<unk>".to_string(), 1);
-        vocab.insert("<bos>".to_string(), 2);
-        vocab.insert("<eos>".to_string(), 3);
-
-        // ASCII characters (4-127)
-        for i in 0u8..128 {
-            let ch = i as char;
-            let id = i as u32 + 4;
-            vocab.insert(ch.to_string(), id);
-            reverse_vocab.insert(id, ch.to_string());
-        }
-
-        // Common JSON patterns (128+)
-        let patterns = [
-            ("messages", 128),
-            ("content", 129),
-            ("role", 130),
-            ("model", 131),
-            ("user", 132),
-            ("assistant", 133),
-            ("system", 134),
-            ("gpt-4", 135),
-            ("claude", 136),
-            ("temperature", 137),
-            ("max_tokens", 138),
-            ("stream", 139),
-            ("true", 140),
-            ("false", 141),
-            ("null", 142),
-        ];
-
-        for (token, id) in patterns {
-            vocab.insert(token.to_string(), id);
-            reverse_vocab.insert(id, token.to_string());
-        }
-
-        // Build reverse vocab for basic chars
-        for (token, &id) in &vocab {
-            reverse_vocab.insert(id, token.clone());
-        }
-
-        Self {
-            vocab,
-            reverse_vocab,
-            special_tokens: SpecialTokens::default(),
-            max_length: 512,
-        }
-    }
-
-    /// Load tokenizer from vocabulary file
-    pub fn from_vocab_file(path: &str) -> Result<Self> {
-        let content = std::fs::read_to_string(path)?;
-        let mut tokenizer = Self::new();
-
-        for line in content.lines() {
-            let parts: Vec<&str> = line.split('\t').collect();
-            if parts.len() == 2 {
-                if let Ok(id) = parts[1].parse::<u32>() {
-                    tokenizer.vocab.insert(parts[0].to_string(), id);
-                    tokenizer.reverse_vocab.insert(id, parts[0].to_string());
-                }
-            }
-        }
-
-        Ok(tokenizer)
-    }
-
-    /// Tokenize text to token IDs
-    pub fn encode(&self, text: &str) -> Vec<u32> {
-        let mut tokens = vec![self.special_tokens.bos];
-
-        // Simple word-level tokenization with JSON pattern matching
-        let mut chars = text.chars().peekable();
-
-        while let Some(ch) = chars.next() {
-            // Try to match known patterns
-            let remaining: String = std::iter::once(ch).chain(chars.clone()).collect();
-
-            let mut matched = false;
-            for (pattern, &id) in &self.vocab {
-                if pattern.len() > 1 && remaining.starts_with(pattern) {
-                    tokens.push(id);
-                    // Skip the matched characters
-                    for _ in 0..pattern.len() - 1 {
-                        chars.next();
-                    }
-                    matched = true;
-                    break;
-                }
-            }
-
-            if !matched {
-                // Single character
-                let token_id = self
-                    .vocab
-                    .get(&ch.to_string())
-                    .copied()
-                    .unwrap_or(self.special_tokens.unk);
-                tokens.push(token_id);
-            }
-        }
-
-        tokens.push(self.special_tokens.eos);
-
-        // Truncate to max length
-        if tokens.len() > self.max_length {
-            tokens.truncate(self.max_length - 1);
-            tokens.push(self.special_tokens.eos);
-        }
-
-        tokens
-    }
-
-    /// Decode token IDs back to text
-    pub fn decode(&self, tokens: &[u32]) -> String {
-        tokens
-            .iter()
-            .filter_map(|&id| {
-                if id == self.special_tokens.pad
-                    || id == self.special_tokens.bos
-                    || id == self.special_tokens.eos
-                {
-                    None
-                } else {
-                    self.reverse_vocab.get(&id).cloned()
-                }
-            })
-            .collect()
-    }
-
-    /// Pad or truncate tokens to specific length
-    pub fn pad_to_length(&self, tokens: &[u32], length: usize) -> Vec<u32> {
-        let mut result = tokens.to_vec();
-
-        if result.len() > length {
-            result.truncate(length - 1);
-            result.push(self.special_tokens.eos);
-        } else {
-            while result.len() < length {
-                result.push(self.special_tokens.pad);
-            }
-        }
-
-        result
-    }
-
-    /// Get vocabulary size
+impl TokenizerType {
+    /// Get the expected vocabulary size for this tokenizer type
+    #[must_use]
     pub fn vocab_size(&self) -> usize {
-        self.vocab.len()
+        match self {
+            Self::Llama3 => 128_000,
+            Self::O200kBase => 200_019,
+            Self::Cl100kBase => 100_256,
+            Self::Fallback => 256, // Byte-level
+        }
     }
 
-    /// Set maximum sequence length
-    pub fn with_max_length(mut self, max_length: usize) -> Self {
-        self.max_length = max_length;
-        self
-    }
-
-    /// Estimate token count (rough approximation)
-    pub fn estimate_tokens(&self, text: &str) -> usize {
-        // Rough estimate: ~4 chars per token for English
-        text.len() / 4 + 2 // +2 for BOS/EOS
-    }
-
-    /// Count tokens in text (actual tokenization)
-    pub fn count_tokens(&self, text: &str) -> usize {
-        self.encode(text).len()
+    /// Get display name
+    #[must_use]
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Llama3 => "llama3",
+            Self::O200kBase => "o200k_base",
+            Self::Cl100kBase => "cl100k_base",
+            Self::Fallback => "fallback",
+        }
     }
 }
+
+impl std::fmt::Display for TokenizerType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.name())
+    }
+}
+
+// ============================================================================
+// HydraTokenizer Trait
+// ============================================================================
+
+/// Trait for tokenizers used by Hydra model.
+///
+/// This trait abstracts over different tokenizer implementations,
+/// allowing Hydra to work with Llama 3, OpenAI, or other tokenizers.
+pub trait HydraTokenizer: Send + Sync {
+    /// Encode text to token IDs.
+    ///
+    /// Returns a vector of token IDs representing the input text.
+    /// The encoding should NOT include special tokens (BOS/EOS) unless
+    /// the specific tokenizer requires them for correct operation.
+    fn encode(&self, text: &str) -> Result<Vec<u32>>;
+
+    /// Decode token IDs back to text.
+    ///
+    /// Returns the original text (or approximation) from token IDs.
+    fn decode(&self, tokens: &[u32]) -> Result<String>;
+
+    /// Get the vocabulary size.
+    fn vocab_size(&self) -> usize;
+
+    /// Get the tokenizer type.
+    fn tokenizer_type(&self) -> TokenizerType;
+
+    /// Truncate tokens to maximum length for Hydra.
+    ///
+    /// Default implementation truncates to `MAX_SEQUENCE_LENGTH`.
+    fn truncate(&self, tokens: Vec<u32>) -> Vec<u32> {
+        if tokens.len() > MAX_SEQUENCE_LENGTH {
+            tokens[..MAX_SEQUENCE_LENGTH].to_vec()
+        } else {
+            tokens
+        }
+    }
+
+    /// Encode and truncate for Hydra input.
+    fn encode_for_hydra(&self, text: &str) -> Result<Vec<u32>> {
+        let tokens = self.encode(text)?;
+        Ok(self.truncate(tokens))
+    }
+}
+
+// ============================================================================
+// Llama3Tokenizer - HuggingFace Tokenizers format
+// ============================================================================
+
+/// Llama 3 tokenizer using HuggingFace Tokenizers library.
+///
+/// This is the primary tokenizer for Hydra, supporting the 128K vocabulary
+/// used by Llama 3 and compatible models.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// let tokenizer = Llama3Tokenizer::from_file("./tokenizer.json")?;
+/// let tokens = tokenizer.encode("Hello, world!")?;
+/// ```
+pub struct Llama3Tokenizer {
+    inner: Tokenizer,
+    vocab_size: usize,
+}
+
+impl Llama3Tokenizer {
+    /// Load tokenizer from a `tokenizer.json` file.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if the file cannot be read or parsed.
+    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
+        let inner = Tokenizer::from_file(path.as_ref())
+            .map_err(|e| M2MError::Tokenizer(format!("Failed to load tokenizer: {e}")))?;
+
+        let vocab_size = inner.get_vocab_size(true);
+
+        Ok(Self { inner, vocab_size })
+    }
+
+    /// Load tokenizer from JSON string.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if the JSON is invalid.
+    pub fn from_json(json: &str) -> Result<Self> {
+        Self::from_bytes(json.as_bytes())
+    }
+
+    /// Load tokenizer from bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if the bytes are not valid JSON.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        let inner = Tokenizer::from_bytes(bytes)
+            .map_err(|e| M2MError::Tokenizer(format!("Failed to parse tokenizer: {e}")))?;
+
+        let vocab_size = inner.get_vocab_size(true);
+
+        Ok(Self { inner, vocab_size })
+    }
+}
+
+impl HydraTokenizer for Llama3Tokenizer {
+    fn encode(&self, text: &str) -> Result<Vec<u32>> {
+        let encoding = self
+            .inner
+            .encode(text, false)
+            .map_err(|e| M2MError::Tokenizer(format!("Encoding failed: {e}")))?;
+
+        Ok(encoding.get_ids().to_vec())
+    }
+
+    fn decode(&self, tokens: &[u32]) -> Result<String> {
+        self.inner
+            .decode(tokens, true)
+            .map_err(|e| M2MError::Tokenizer(format!("Decoding failed: {e}")))
+    }
+
+    fn vocab_size(&self) -> usize {
+        self.vocab_size
+    }
+
+    fn tokenizer_type(&self) -> TokenizerType {
+        TokenizerType::Llama3
+    }
+}
+
+// ============================================================================
+// TiktokenTokenizer - OpenAI tiktoken format
+// ============================================================================
+
+/// OpenAI tiktoken-based tokenizer.
+///
+/// Supports cl100k_base (GPT-4) and o200k_base (GPT-4o) encodings.
+pub struct TiktokenTokenizer {
+    inner: CoreBPE,
+    tokenizer_type: TokenizerType,
+}
+
+impl TiktokenTokenizer {
+    /// Create cl100k_base tokenizer (GPT-3.5, GPT-4).
+    ///
+    /// # Errors
+    ///
+    /// Returns error if tokenizer initialization fails.
+    pub fn cl100k() -> Result<Self> {
+        let inner = cl100k_base()
+            .map_err(|e| M2MError::Tokenizer(format!("Failed to load cl100k: {e}")))?;
+
+        Ok(Self {
+            inner,
+            tokenizer_type: TokenizerType::Cl100kBase,
+        })
+    }
+
+    /// Create o200k_base tokenizer (GPT-4o, o1, o3).
+    ///
+    /// # Errors
+    ///
+    /// Returns error if tokenizer initialization fails.
+    pub fn o200k() -> Result<Self> {
+        let inner =
+            o200k_base().map_err(|e| M2MError::Tokenizer(format!("Failed to load o200k: {e}")))?;
+
+        Ok(Self {
+            inner,
+            tokenizer_type: TokenizerType::O200kBase,
+        })
+    }
+
+    /// Create tokenizer from type.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if tokenizer initialization fails or type is not tiktoken-based.
+    pub fn from_type(tokenizer_type: TokenizerType) -> Result<Self> {
+        match tokenizer_type {
+            TokenizerType::Cl100kBase => Self::cl100k(),
+            TokenizerType::O200kBase => Self::o200k(),
+            _ => Err(M2MError::Tokenizer(format!(
+                "Tokenizer type {tokenizer_type} is not tiktoken-based"
+            ))),
+        }
+    }
+}
+
+impl HydraTokenizer for TiktokenTokenizer {
+    fn encode(&self, text: &str) -> Result<Vec<u32>> {
+        // tiktoken Rank is u32, so direct collect works
+        Ok(self.inner.encode_with_special_tokens(text))
+    }
+
+    fn decode(&self, tokens: &[u32]) -> Result<String> {
+        // tiktoken Rank is u32, so just convert slice to Vec
+        self.inner
+            .decode(tokens.to_vec())
+            .map_err(|e| M2MError::Tokenizer(format!("Decoding failed: {e}")))
+    }
+
+    fn vocab_size(&self) -> usize {
+        self.tokenizer_type.vocab_size()
+    }
+
+    fn tokenizer_type(&self) -> TokenizerType {
+        self.tokenizer_type
+    }
+}
+
+// ============================================================================
+// FallbackTokenizer - Simple byte-level tokenizer
+// ============================================================================
+
+/// Fallback byte-level tokenizer.
+///
+/// Used when no proper tokenizer is available. Maps bytes directly to token IDs.
+/// This is NOT recommended for production use but ensures Hydra can always run.
+#[derive(Debug, Clone, Default)]
+pub struct FallbackTokenizer {
+    vocab_size: usize,
+}
+
+impl FallbackTokenizer {
+    /// Create new fallback tokenizer.
+    #[must_use]
+    pub fn new() -> Self {
+        Self { vocab_size: 256 }
+    }
+
+    /// Create fallback tokenizer that maps to a specific vocab size.
+    ///
+    /// Token IDs will be `byte % vocab_size` to ensure they fit within bounds.
+    #[must_use]
+    pub fn with_vocab_size(vocab_size: usize) -> Self {
+        Self { vocab_size }
+    }
+}
+
+impl HydraTokenizer for FallbackTokenizer {
+    fn encode(&self, text: &str) -> Result<Vec<u32>> {
+        Ok(text
+            .bytes()
+            .map(|b| (b as u32) % (self.vocab_size as u32))
+            .collect())
+    }
+
+    fn decode(&self, tokens: &[u32]) -> Result<String> {
+        // Best effort: treat tokens as bytes
+        let bytes: Vec<u8> = tokens
+            .iter()
+            .filter_map(|&t| if t < 256 { Some(t as u8) } else { None })
+            .collect();
+
+        String::from_utf8(bytes)
+            .map_err(|e| M2MError::Tokenizer(format!("Invalid UTF-8 in tokens: {e}")))
+    }
+
+    fn vocab_size(&self) -> usize {
+        self.vocab_size
+    }
+
+    fn tokenizer_type(&self) -> TokenizerType {
+        TokenizerType::Fallback
+    }
+}
+
+// ============================================================================
+// BoxedTokenizer - Type-erased tokenizer for dynamic dispatch
+// ============================================================================
+
+/// Type-erased tokenizer for storing different tokenizer implementations.
+pub type BoxedTokenizer = Arc<dyn HydraTokenizer>;
+
+/// Create a boxed tokenizer from a specific implementation.
+pub fn boxed<T: HydraTokenizer + 'static>(tokenizer: T) -> BoxedTokenizer {
+    Arc::new(tokenizer)
+}
+
+// ============================================================================
+// Tokenizer Loading Utilities
+// ============================================================================
+
+/// Load the best available tokenizer for Hydra.
+///
+/// Attempts to load in order:
+/// 1. Llama 3 tokenizer from the specified path
+/// 2. Fallback tokenizer with specified vocab size
+///
+/// # Arguments
+///
+/// * `tokenizer_path` - Optional path to `tokenizer.json`
+/// * `vocab_size` - Fallback vocab size if no tokenizer found
+///
+/// # Example
+///
+/// ```rust,ignore
+/// let tokenizer = load_tokenizer(Some("./models/hydra/tokenizer.json"), 128000)?;
+/// ```
+pub fn load_tokenizer(tokenizer_path: Option<&Path>, vocab_size: usize) -> Result<BoxedTokenizer> {
+    // Try to load Llama 3 tokenizer if path provided
+    if let Some(path) = tokenizer_path {
+        if path.exists() {
+            match Llama3Tokenizer::from_file(path) {
+                Ok(tokenizer) => {
+                    tracing::info!(
+                        "Loaded Llama 3 tokenizer from {} (vocab: {})",
+                        path.display(),
+                        tokenizer.vocab_size()
+                    );
+                    return Ok(boxed(tokenizer));
+                },
+                Err(e) => {
+                    tracing::warn!("Failed to load tokenizer from {}: {e}", path.display());
+                },
+            }
+        }
+    }
+
+    // Fallback
+    tracing::warn!(
+        "Using fallback byte-level tokenizer (vocab_size: {vocab_size}). \
+         For best results, provide a tokenizer.json file."
+    );
+    Ok(boxed(FallbackTokenizer::with_vocab_size(vocab_size)))
+}
+
+/// Load tokenizer by type.
+///
+/// # Errors
+///
+/// Returns error if the specified tokenizer type cannot be loaded.
+pub fn load_tokenizer_by_type(
+    tokenizer_type: TokenizerType,
+    tokenizer_path: Option<&Path>,
+) -> Result<BoxedTokenizer> {
+    match tokenizer_type {
+        TokenizerType::Llama3 => {
+            let path = tokenizer_path
+                .ok_or_else(|| M2MError::Tokenizer("Llama3 tokenizer requires a path".into()))?;
+            Ok(boxed(Llama3Tokenizer::from_file(path)?))
+        },
+        TokenizerType::O200kBase => Ok(boxed(TiktokenTokenizer::o200k()?)),
+        TokenizerType::Cl100kBase => Ok(boxed(TiktokenTokenizer::cl100k()?)),
+        TokenizerType::Fallback => Ok(boxed(FallbackTokenizer::new())),
+    }
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_encode_decode() {
-        let tokenizer = SimpleTokenizer::new();
-        let text = "Hello, world!";
+    fn test_fallback_tokenizer_encode_decode() {
+        let tokenizer = FallbackTokenizer::new();
+        let text = "Hello";
 
-        let tokens = tokenizer.encode(text);
+        let tokens = tokenizer.encode(text).unwrap();
+        assert_eq!(tokens.len(), 5); // 5 bytes
+
+        // Verify byte values
+        assert_eq!(tokens[0], b'H' as u32);
+        assert_eq!(tokens[1], b'e' as u32);
+    }
+
+    #[test]
+    fn test_fallback_tokenizer_vocab_mapping() {
+        let tokenizer = FallbackTokenizer::with_vocab_size(128000);
+        let text = "Test";
+
+        let tokens = tokenizer.encode(text).unwrap();
+
+        // All tokens should be < vocab_size
+        for &t in &tokens {
+            assert!(t < 128000);
+        }
+    }
+
+    #[test]
+    fn test_tiktoken_cl100k() {
+        let tokenizer = TiktokenTokenizer::cl100k().unwrap();
+
+        assert_eq!(tokenizer.tokenizer_type(), TokenizerType::Cl100kBase);
+        assert_eq!(tokenizer.vocab_size(), 100_256);
+
+        let tokens = tokenizer.encode("Hello, world!").unwrap();
         assert!(!tokens.is_empty());
-        assert_eq!(tokens[0], tokenizer.special_tokens.bos);
-        assert_eq!(*tokens.last().unwrap(), tokenizer.special_tokens.eos);
 
-        let decoded = tokenizer.decode(&tokens);
-        assert_eq!(decoded, text);
+        let decoded = tokenizer.decode(&tokens).unwrap();
+        assert_eq!(decoded, "Hello, world!");
     }
 
     #[test]
-    fn test_json_pattern_matching() {
-        let tokenizer = SimpleTokenizer::new();
-        let text = r#"{"messages":[{"role":"user","content":"Hello"}]}"#;
+    fn test_tiktoken_o200k() {
+        let tokenizer = TiktokenTokenizer::o200k().unwrap();
 
-        let tokens = tokenizer.encode(text);
+        assert_eq!(tokenizer.tokenizer_type(), TokenizerType::O200kBase);
+        assert_eq!(tokenizer.vocab_size(), 200_019);
 
-        // Should contain the pattern tokens
-        let has_messages = tokens.contains(&128); // "messages"
-        let has_role = tokens.contains(&130); // "role"
-        let has_content = tokens.contains(&129); // "content"
+        let tokens = tokenizer.encode("Hello, world!").unwrap();
+        assert!(!tokens.is_empty());
 
-        assert!(has_messages || has_role || has_content);
+        let decoded = tokenizer.decode(&tokens).unwrap();
+        assert_eq!(decoded, "Hello, world!");
     }
 
     #[test]
-    fn test_padding() {
-        let tokenizer = SimpleTokenizer::new();
-        let tokens = vec![2, 72, 101, 108, 108, 111, 3]; // <bos>Hello<eos>
+    fn test_truncate() {
+        let tokenizer = FallbackTokenizer::new();
 
-        let padded = tokenizer.pad_to_length(&tokens, 10);
-        assert_eq!(padded.len(), 10);
-        assert_eq!(padded[7], 0); // PAD token
+        // Create tokens longer than MAX_SEQUENCE_LENGTH
+        let long_text = "x".repeat(MAX_SEQUENCE_LENGTH + 100);
+        let tokens = tokenizer.encode(&long_text).unwrap();
+        let truncated = tokenizer.truncate(tokens);
+
+        assert_eq!(truncated.len(), MAX_SEQUENCE_LENGTH);
     }
 
     #[test]
-    fn test_truncation() {
-        let tokenizer = SimpleTokenizer::new().with_max_length(10);
-        let long_text = "This is a very long text that should be truncated";
-
-        let tokens = tokenizer.encode(long_text);
-        assert!(tokens.len() <= 10);
-        assert_eq!(*tokens.last().unwrap(), tokenizer.special_tokens.eos);
+    fn test_tokenizer_type_vocab_size() {
+        assert_eq!(TokenizerType::Llama3.vocab_size(), 128_000);
+        assert_eq!(TokenizerType::O200kBase.vocab_size(), 200_019);
+        assert_eq!(TokenizerType::Cl100kBase.vocab_size(), 100_256);
+        assert_eq!(TokenizerType::Fallback.vocab_size(), 256);
     }
 }

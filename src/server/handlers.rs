@@ -333,11 +333,15 @@ async fn process_message(
         },
         MessageType::Data => {
             // Process data message
-            let session_id = message
-                .session_id
-                .as_ref()
-                .ok_or("Missing session ID")
-                .unwrap();
+            let Some(session_id) = message.session_id.as_ref() else {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(Message::reject(
+                        crate::protocol::RejectionCode::Unknown,
+                        "Missing session ID",
+                    )),
+                );
+            };
 
             match state.sessions.get(session_id).await {
                 Some(mut session) => match session.decompress(&message) {

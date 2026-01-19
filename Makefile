@@ -230,15 +230,27 @@ distclean: clean
 # Hydra Model
 # =============================================================================
 
-## Download Hydra model from HuggingFace
+## Download Hydra model and tokenizer from HuggingFace
 model-download:
-	@mkdir -p models
+	@mkdir -p models/hydra
 	huggingface-cli download infernet/hydra --local-dir ./models/hydra
-	@echo "✓ Model downloaded to ./models/hydra"
+	@echo "Downloading Llama 3 tokenizer..."
+	@curl -sL "https://huggingface.co/NousResearch/Meta-Llama-3.1-8B/resolve/main/tokenizer.json" -o ./models/hydra/tokenizer.json
+	@echo "✓ Model and tokenizer downloaded to ./models/hydra"
+	@ls -la ./models/hydra/
 
-## Verify Hydra model
+## Download tokenizer only (if model already exists)
+tokenizer-download:
+	@mkdir -p models/hydra
+	@echo "Downloading Llama 3 tokenizer..."
+	curl -sL "https://huggingface.co/NousResearch/Meta-Llama-3.1-8B/resolve/main/tokenizer.json" -o ./models/hydra/tokenizer.json
+	@echo "✓ Tokenizer downloaded to ./models/hydra/tokenizer.json"
+
+## Verify Hydra model and tokenizer
 model-verify:
-	@test -d ./models/hydra && echo "✓ Model found" || echo "✗ Model not found (run: make model-download)"
+	@echo "Checking model files..."
+	@test -f ./models/hydra/model.safetensors && echo "✓ model.safetensors found" || echo "✗ model.safetensors not found"
+	@test -f ./models/hydra/tokenizer.json && echo "✓ tokenizer.json found" || echo "✗ tokenizer.json not found (run: make tokenizer-download)"
 
 # =============================================================================
 # Help

@@ -112,24 +112,24 @@ pub struct ProxyState {
 }
 
 impl ProxyState {
-    fn new(config: ProxyConfig) -> Self {
+    fn new(config: ProxyConfig) -> Result<Self> {
         let client = Client::builder()
             .timeout(std::time::Duration::from_secs(config.timeout_secs))
             .build()
-            .expect("Failed to create HTTP client");
+            .map_err(|e| crate::M2MError::Network(format!("Failed to create HTTP client: {e}")))?;
 
         let scanner = SecurityScanner::new().with_blocking(config.security_threshold);
 
         let (shutdown_tx, _) = broadcast::channel(1);
 
-        Self {
+        Ok(Self {
             config,
             client,
             codec: CodecEngine::new(),
             scanner,
             stats: Arc::new(ProxyStats::new()),
             shutdown_tx,
-        }
+        })
     }
 }
 
@@ -140,10 +140,10 @@ pub struct ProxyServer {
 
 impl ProxyServer {
     /// Create a new proxy server
-    pub fn new(config: ProxyConfig) -> Self {
-        Self {
-            state: Arc::new(ProxyState::new(config)),
-        }
+    pub fn new(config: ProxyConfig) -> Result<Self> {
+        Ok(Self {
+            state: Arc::new(ProxyState::new(config)?),
+        })
     }
 
     /// Get the router for the proxy
@@ -608,14 +608,14 @@ mod tests {
     #[test]
     fn test_proxy_state_creation() {
         let config = ProxyConfig::default();
-        let state = ProxyState::new(config);
+        let state = ProxyState::new(config).unwrap();
         assert_eq!(state.stats.total_requests(), 0);
     }
 
     #[tokio::test]
     async fn test_health_endpoint() {
         let config = ProxyConfig::default();
-        let server = ProxyServer::new(config);
+        let server = ProxyServer::new(config).unwrap();
         let _app = server.router();
 
         let _response = axum::http::Request::builder()

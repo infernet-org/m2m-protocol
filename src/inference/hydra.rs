@@ -5,7 +5,11 @@
 //!
 //! - **Compression algorithm selection**: Predicts optimal algorithm based on content
 //! - **Security threat detection**: Classifies prompt injection and jailbreak attempts
-//! - **Token estimation**: Estimates token counts without full tokenization
+//!
+//! ## Tokenizer Support
+//!
+//! Hydra v2.0 uses the Llama 3 tokenizer (128K vocab) by default for best open-source
+//! model compatibility. Alternative tokenizers (tiktoken o200k, cl100k) are also supported.
 //!
 //! ## Model Weights
 //!
@@ -18,9 +22,9 @@
 //! ## Usage
 //!
 //! ```rust,ignore
-//! use m2m::inference::HydraModel;
+//! use m2m::inference::{HydraModel, Llama3Tokenizer};
 //!
-//! // Load model (requires `onnx` feature)
+//! // Load model with tokenizer
 //! let model = HydraModel::load("./models/hydra")?;
 //!
 //! // Get compression recommendation
@@ -36,20 +40,16 @@
 //!
 //! ## Heuristic Fallback
 //!
-//! When the `onnx` feature is disabled or model loading fails, Hydra falls back
+//! When model loading fails or tokenizer is unavailable, Hydra falls back
 //! to rule-based heuristics that approximate model behavior.
 
 use std::path::Path;
-#[cfg(feature = "onnx")]
-use std::sync::Arc;
 
 use crate::codec::Algorithm;
-#[cfg(feature = "onnx")]
-use crate::error::M2MError;
 use crate::error::Result;
 
 use super::bitnet::HydraBitNet;
-use super::tokenizer::SimpleTokenizer;
+use super::tokenizer::{load_tokenizer, BoxedTokenizer, FallbackTokenizer, TokenizerType};
 
 /// Compression decision from the model
 #[derive(Debug, Clone)]
@@ -139,12 +139,25 @@ impl std::fmt::Display for ThreatType {
 ///
 /// Supports multiple inference backends:
 /// 1. Native safetensors (preferred) - pure Rust inference
-/// 2. ONNX Runtime (optional) - requires `onnx` feature
-/// 3. Heuristic fallback - rule-based when model unavailable
-#[derive(Clone)]
+/// 2. Heuristic fallback - rule-based when model unavailable
+///
+/// # Tokenizer Support
+///
+/// Hydra uses trait-based tokenization supporting:
+/// - Llama 3 (128K vocab) - default for open source
+/// - OpenAI o200k_base (200K vocab)
+/// - OpenAI cl100k_base (100K vocab)
+/// - Fallback byte-level tokenizer
+///
+/// # Vocab Mismatch Handling
+///
+/// The current model (v1.0) was trained with 32K vocab. When using a larger
+/// tokenizer (e.g., Llama 3 128K), token IDs exceeding the model's vocab size
+/// are clamped to `vocab_size - 1`. This preserves functionality but may
+/// degrade accuracy. A warning is logged when this occurs.
 pub struct HydraModel {
-    /// Tokenizer for input preparation
-    tokenizer: SimpleTokenizer,
+    /// Tokenizer for input preparation (trait object)
+    tokenizer: BoxedTokenizer,
     /// Model loaded state
     loaded: bool,
     /// Model path (for debugging/logging)
@@ -153,9 +166,21 @@ pub struct HydraModel {
     use_fallback: bool,
     /// Native model (safetensors)
     native_model: Option<HydraBitNet>,
-    /// ONNX session (optional, loaded on demand)
-    #[cfg(feature = "onnx")]
-    session: Option<Arc<ort::session::Session>>,
+    /// Model's vocabulary size (for clamping)
+    model_vocab_size: usize,
+}
+
+impl Clone for HydraModel {
+    fn clone(&self) -> Self {
+        Self {
+            tokenizer: self.tokenizer.clone(), // Arc clone is cheap
+            loaded: self.loaded,
+            model_path: self.model_path.clone(),
+            use_fallback: self.use_fallback,
+            native_model: self.native_model.clone(),
+            model_vocab_size: self.model_vocab_size,
+        }
+    }
 }
 
 impl Default for HydraModel {
@@ -165,109 +190,134 @@ impl Default for HydraModel {
 }
 
 impl HydraModel {
-    /// Create new model (unloaded)
+    /// Default model vocabulary size (Hydra v1.0)
+    const DEFAULT_MODEL_VOCAB_SIZE: usize = 32_000;
+
+    /// Create new model (unloaded, with fallback tokenizer)
     pub fn new() -> Self {
         Self {
-            tokenizer: SimpleTokenizer::new(),
+            tokenizer: super::tokenizer::boxed(FallbackTokenizer::with_vocab_size(128_000)),
             loaded: false,
             model_path: None,
             use_fallback: true,
             native_model: None,
-            #[cfg(feature = "onnx")]
-            session: None,
+            model_vocab_size: Self::DEFAULT_MODEL_VOCAB_SIZE,
         }
     }
 
     /// Create model with fallback only (no neural inference)
     pub fn fallback_only() -> Self {
         Self {
-            tokenizer: SimpleTokenizer::new(),
+            tokenizer: super::tokenizer::boxed(FallbackTokenizer::with_vocab_size(128_000)),
             loaded: false,
             model_path: None,
             use_fallback: true,
             native_model: None,
-            #[cfg(feature = "onnx")]
-            session: None,
+            model_vocab_size: Self::DEFAULT_MODEL_VOCAB_SIZE,
         }
     }
 
-    /// Load model from file
+    /// Create model with a specific tokenizer
+    pub fn with_tokenizer(tokenizer: BoxedTokenizer) -> Self {
+        Self {
+            tokenizer,
+            loaded: false,
+            model_path: None,
+            use_fallback: true,
+            native_model: None,
+            model_vocab_size: Self::DEFAULT_MODEL_VOCAB_SIZE,
+        }
+    }
+
+    /// Load model from directory or file
     ///
-    /// Supports multiple formats:
-    /// - `.safetensors` - Native Rust inference (preferred)
-    /// - `.onnx` - ONNX Runtime (requires `onnx` feature)
+    /// Expects directory structure:
+    /// ```text
+    /// ./models/hydra/
+    /// ├── model.safetensors
+    /// └── tokenizer.json (optional, uses fallback if missing)
+    /// ```
+    ///
+    /// Or a direct path to `.safetensors` file.
     ///
     /// Falls back to heuristics if loading fails.
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self> {
         let path = path.as_ref();
         let path_str = path.to_string_lossy().to_string();
 
-        // Try native safetensors first
-        if path_str.ends_with(".safetensors") || path.join("model.safetensors").exists() {
-            let safetensors_path = if path_str.ends_with(".safetensors") {
-                path.to_path_buf()
-            } else {
-                path.join("model.safetensors")
-            };
+        // Determine model and tokenizer paths
+        let (model_path, tokenizer_path) = if path.is_dir() {
+            (
+                path.join("model.safetensors"),
+                Some(path.join("tokenizer.json")),
+            )
+        } else if path_str.ends_with(".safetensors") {
+            let parent = path.parent().unwrap_or(path);
+            (path.to_path_buf(), Some(parent.join("tokenizer.json")))
+        } else {
+            (path.to_path_buf(), None)
+        };
 
-            match HydraBitNet::load(&safetensors_path) {
+        // Load tokenizer (falls back to byte-level if not found)
+        let tokenizer = load_tokenizer(
+            tokenizer_path.as_deref(),
+            128_000, // Llama 3 vocab size for fallback
+        )?;
+
+        tracing::info!(
+            "Using {} tokenizer (vocab: {})",
+            tokenizer.tokenizer_type(),
+            tokenizer.vocab_size()
+        );
+
+        // Try native safetensors first
+        if model_path.exists() && model_path.to_string_lossy().ends_with(".safetensors") {
+            match HydraBitNet::load(&model_path) {
                 Ok(model) => {
+                    let model_vocab = model.config().vocab_size;
+                    let tokenizer_vocab = tokenizer.vocab_size();
+
+                    tracing::info!("Loaded native Hydra model from {}", model_path.display());
+
+                    // Warn about vocab mismatch
+                    if tokenizer_vocab > model_vocab {
+                        tracing::warn!(
+                            "Tokenizer vocab ({}) > model vocab ({}). \
+                             Token IDs will be clamped, which may degrade accuracy. \
+                             Consider retraining Hydra with the {} tokenizer.",
+                            tokenizer_vocab,
+                            model_vocab,
+                            tokenizer.tokenizer_type()
+                        );
+                    }
+
                     return Ok(Self {
-                        tokenizer: SimpleTokenizer::new(),
+                        tokenizer,
                         loaded: true,
-                        model_path: Some(safetensors_path.to_string_lossy().to_string()),
+                        model_path: Some(model_path.to_string_lossy().to_string()),
                         use_fallback: false,
                         native_model: Some(model),
-                        #[cfg(feature = "onnx")]
-                        session: None,
+                        model_vocab_size: model_vocab,
                     });
                 },
                 Err(e) => {
-                    tracing::warn!("Failed to load native model: {e}, trying other backends");
+                    tracing::warn!("Failed to load native model: {e}");
                 },
-            }
-        }
-
-        // Try ONNX if feature enabled
-        #[cfg(feature = "onnx")]
-        {
-            use ort::session::builder::GraphOptimizationLevel;
-            use ort::session::Session;
-
-            let onnx_path = if path_str.to_ascii_lowercase().ends_with(".onnx") {
-                path.to_path_buf()
-            } else {
-                path.join("model.onnx")
-            };
-
-            if onnx_path.exists() {
-                let session = Session::builder()
-                    .map_err(|e| M2MError::ModelLoad(e.to_string()))?
-                    .with_optimization_level(GraphOptimizationLevel::Level3)
-                    .map_err(|e| M2MError::ModelLoad(e.to_string()))?
-                    .commit_from_file(&onnx_path)
-                    .map_err(|e| M2MError::ModelLoad(e.to_string()))?;
-
-                return Ok(Self {
-                    tokenizer: SimpleTokenizer::new(),
-                    loaded: true,
-                    model_path: Some(onnx_path.to_string_lossy().to_string()),
-                    use_fallback: true,
-                    native_model: None,
-                    session: Some(Arc::new(session)),
-                });
             }
         }
 
         // Fallback to heuristics
+        tracing::warn!(
+            "No model found at {}, using heuristic fallback",
+            path.display()
+        );
         Ok(Self {
-            tokenizer: SimpleTokenizer::new(),
+            tokenizer,
             loaded: false,
             model_path: Some(path_str),
             use_fallback: true,
             native_model: None,
-            #[cfg(feature = "onnx")]
-            session: None,
+            model_vocab_size: Self::DEFAULT_MODEL_VOCAB_SIZE,
         })
     }
 
@@ -286,9 +336,34 @@ impl HydraModel {
         self.use_fallback
     }
 
-    /// Estimate token count for content using the internal tokenizer
-    pub fn estimate_tokens(&self, content: &str) -> usize {
-        self.tokenizer.count_tokens(content)
+    /// Get the tokenizer type
+    pub fn tokenizer_type(&self) -> TokenizerType {
+        self.tokenizer.tokenizer_type()
+    }
+
+    /// Get vocabulary size
+    pub fn vocab_size(&self) -> usize {
+        self.tokenizer.vocab_size()
+    }
+
+    /// Get the model's vocabulary size (may differ from tokenizer)
+    pub fn model_vocab_size(&self) -> usize {
+        self.model_vocab_size
+    }
+
+    /// Check if there's a tokenizer/model vocab mismatch
+    pub fn has_vocab_mismatch(&self) -> bool {
+        self.tokenizer.vocab_size() > self.model_vocab_size
+    }
+
+    /// Clamp token IDs to model's vocabulary size.
+    ///
+    /// When tokenizer vocab > model vocab, high token IDs must be clamped
+    /// to prevent out-of-bounds embedding lookups. This is a workaround
+    /// until the model is retrained with the larger vocab.
+    fn clamp_tokens(&self, tokens: &[u32]) -> Vec<u32> {
+        let max_id = (self.model_vocab_size - 1) as u32;
+        tokens.iter().map(|&t| t.min(max_id)).collect()
     }
 
     /// Predict compression algorithm for content
@@ -296,12 +371,6 @@ impl HydraModel {
         // Try native model first
         if let Some(ref model) = self.native_model {
             return self.predict_compression_native(model, content);
-        }
-
-        // Try ONNX
-        #[cfg(feature = "onnx")]
-        if let Some(ref session) = self.session {
-            return self.predict_compression_onnx(session, content);
         }
 
         // Use heuristic fallback
@@ -315,12 +384,6 @@ impl HydraModel {
             return self.predict_security_native(model, content);
         }
 
-        // Try ONNX
-        #[cfg(feature = "onnx")]
-        if let Some(ref session) = self.session {
-            return self.predict_security_onnx(session, content);
-        }
-
         // Use heuristic fallback
         self.predict_security_heuristic(content)
     }
@@ -332,16 +395,15 @@ impl HydraModel {
         model: &HydraBitNet,
         content: &str,
     ) -> Result<CompressionDecision> {
-        // Tokenize content (simple byte-level, mapped to vocab)
-        let token_ids: Vec<u32> = content
-            .bytes()
-            .map(|b| (b as u32) % model.config().vocab_size as u32)
-            .take(512) // max sequence length
-            .collect();
+        // Tokenize using the configured tokenizer
+        let token_ids = self.tokenizer.encode_for_hydra(content)?;
 
         if token_ids.is_empty() {
             return self.predict_compression_heuristic(content);
         }
+
+        // Clamp token IDs if tokenizer vocab > model vocab
+        let token_ids = self.clamp_tokens(&token_ids);
 
         let probs = model.predict_compression(&token_ids);
 
@@ -380,16 +442,15 @@ impl HydraModel {
         model: &HydraBitNet,
         content: &str,
     ) -> Result<SecurityDecision> {
-        // Tokenize content
-        let token_ids: Vec<u32> = content
-            .bytes()
-            .map(|b| (b as u32) % model.config().vocab_size as u32)
-            .take(512)
-            .collect();
+        // Tokenize using the configured tokenizer
+        let token_ids = self.tokenizer.encode_for_hydra(content)?;
 
         if token_ids.is_empty() {
             return self.predict_security_heuristic(content);
         }
+
+        // Clamp token IDs if tokenizer vocab > model vocab
+        let token_ids = self.clamp_tokens(&token_ids);
 
         let probs = model.predict_security(&token_ids);
 
@@ -458,8 +519,8 @@ impl HydraModel {
     /// - B (believed): TokenNative is best for small-medium LLM API JSON (<1KB)
     fn predict_compression_heuristic(&self, content: &str) -> Result<CompressionDecision> {
         let len = content.len();
-        // Use tokenizer for better size estimation
-        let token_count = self.tokenizer.count_tokens(content);
+        // Estimate tokens (~4 chars per token for English)
+        let estimated_tokens = len / 4;
 
         // Analyze content characteristics
         let is_json = content.trim().starts_with('{') || content.trim().starts_with('[');
@@ -486,7 +547,7 @@ impl HydraModel {
         }
         // Small content (by bytes or tokens): NONE
         // Epistemic: K - Compression overhead exceeds savings
-        else if len < 100 || token_count < 25 {
+        else if len < 100 || estimated_tokens < 25 {
             probs.none = 0.9;
             probs.token_native = 0.1;
         }
@@ -614,29 +675,6 @@ impl HydraModel {
         }
 
         1.0 - (seen.len() as f32 / total as f32)
-    }
-
-    // TODO: Implement ONNX inference with ort 2.0 API when Hydra model is ready.
-    // The ort 2.0 crate has a different tensor API. For now, ONNX feature enables
-    // model loading but uses heuristic inference as fallback.
-    #[cfg(feature = "onnx")]
-    fn predict_compression_onnx(
-        &self,
-        _session: &ort::session::Session,
-        content: &str,
-    ) -> Result<CompressionDecision> {
-        // Fallback to heuristic until ONNX tensor integration is complete
-        self.predict_compression_heuristic(content)
-    }
-
-    #[cfg(feature = "onnx")]
-    fn predict_security_onnx(
-        &self,
-        _session: &ort::session::Session,
-        content: &str,
-    ) -> Result<SecurityDecision> {
-        // Fallback to heuristic until ONNX tensor integration is complete
-        self.predict_security_heuristic(content)
     }
 }
 

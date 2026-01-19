@@ -699,7 +699,7 @@ fn cmd_proxy(
     };
 
     // Create and run proxy server
-    let server = ProxyServer::new(config);
+    let server = ProxyServer::new(config).map_err(|e| anyhow::anyhow!("{}", e))?;
 
     let runtime = tokio::runtime::Runtime::new()?;
     runtime.block_on(async { server.run().await.map_err(|e| anyhow::anyhow!("{}", e)) })

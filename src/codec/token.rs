@@ -224,7 +224,6 @@ impl TokenCodec {
         }
     }
 
-    #[allow(clippy::only_used_in_recursion)]
     fn expand_value(&self, value: &Value, parent_key: Option<&str>) -> Value {
         match value {
             Value::Object(map) => {
