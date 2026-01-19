@@ -246,7 +246,7 @@ impl Session {
             return Err(M2MError::SessionExpired);
         }
 
-        let algorithm = self.algorithm().unwrap_or(Algorithm::Token);
+        let algorithm = self.algorithm().unwrap_or(Algorithm::M3);
         let result = self.codec.compress(content, algorithm)?;
 
         // Update stats

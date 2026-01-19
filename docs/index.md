@@ -48,7 +48,7 @@ As autonomous agents multiply, three problems emerge:
 │                    │  └────────────────────────────┘  │                     │
 │                    └──────────────────────────────────┘                     │
 │                                                                             │
-│  Wire Formats:  #TK|C|<tokens>   #T1|<json>   #M2M[v3.0]|DATA:<brotli>     │
+│  Wire Formats:  #M3|<schema><binary>   #TK|C|<tokens>   #M2M[v3.0]|DATA:<brotli>     │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -103,37 +103,50 @@ if !scan.safe {
 }
 ```
 
-## Token-Native Compression
+## Schema-Aware Compression
 
 **Compression that actually reduces LLM costs.**
 
-Gzip outputs binary, requiring Base64 encoding, which *increases* token count. M2M compresses in token-space:
+Traditional compression outputs binary, requiring Base64 encoding, which *increases* token count. M2M's M3 protocol eliminates JSON structural overhead entirely:
 
-| Approach | Bytes | Tokens | Cost |
-|----------|-------|--------|------|
-| Original JSON | 68 | 42 | $0.42/1M |
-| Gzip + Base64 | 52 | 58 | **$0.58/1M** ❌ |
-| M2M TokenNative | 45 | — | **$0.38/1M** ✓ |
+| Approach | Bytes | Savings |
+|----------|-------|---------|
+| Original JSON | 147 | — |
+| Gzip + Base64 | 180 | **-22%** (worse) |
+| M3 Schema-Aware | 60 | **59%** |
 
 ### Wire Formats
 
 ```
-#TK|C|W3sib29kZWw...        TokenNative: BPE token IDs (30-35% savings)
-#T1|{"M":"4o","m":[...]}    Token: Abbreviated JSON (human-readable)
-#M2M[v3.0]|DATA:...         Brotli: Large content compression
+#M3|<schema><binary>             M3: Schema-aware binary (59% savings)
+#TK|C|<token_ids>                TokenNative: BPE token IDs (30-35%)
+#M2M[v3.0]|DATA:<brotli>         Brotli: Large content compression
+```
+
+### M3 Protocol
+
+M3 eliminates JSON structural overhead by using positional encoding with a known schema. Both M2M endpoints understand the LLM API schema, so structure doesn't need to be transmitted.
+
+```
+Wire format: #M3|<schema:1byte><payload>
+
+ChatCompletionRequest:
+  [model_len:varint][model:utf8]
+  [flags:1byte]
+  [num_messages:varint]
+  [messages...]  // role:1byte + content_len:varint + content:utf8
+  [params...]    // based on flags
 ```
 
 ### Validated Benchmarks
 
-| Content | Original | Compressed | Savings |
-|---------|----------|------------|---------|
-| Chat request | 2.4 KB | 1.6 KB | 33% |
-| Multi-turn conversation | 48 KB | 32 KB | 33% |
-| Tool calls + schema | 8.2 KB | 5.4 KB | 34% |
+| Content | Original | M3 | Savings |
+|---------|----------|-----|---------|
+| Simple chat request | 147 B | 60 B | 59% |
+| Multi-turn conversation | 2.4 KB | 1.0 KB | 58% |
+| Tool calls + schema | 8.2 KB | 3.5 KB | 57% |
 
-*TokenNative, wire format. Binary transport achieves ~50% savings.*
-
-`[TokenNative: Available]` `[Token T1: Available]` `[Brotli: Available]`
+`[M3: Default]` `[TokenNative: Available]` `[Brotli: Large content]`
 
 ## Transport: Built for Agents
 
@@ -178,9 +191,9 @@ let scanner = SecurityScanner::new().with_blocking(0.8);
 let scan = scanner.scan(content)?;
 
 if scan.safe {
-    // Compress for M2M transmission
+    // Compress for M2M transmission (M3 is default)
     let engine = CodecEngine::new();
-    let result = engine.compress(content, Algorithm::TokenNative)?;
+    let result = engine.compress(content, Algorithm::M3)?;
 }
 ```
 

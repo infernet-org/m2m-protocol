@@ -296,6 +296,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_data_message() {
         let msg = Message::data(
             "session-123",

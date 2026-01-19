@@ -9,7 +9,13 @@ use serde::{Deserialize, Serialize};
 pub enum Algorithm {
     /// No compression (passthrough)
     None,
-    /// Token-optimized compression (key/value abbreviation)
+    /// Token-optimized compression (DEPRECATED - only 3% token savings)
+    ///
+    /// Uses key/value abbreviation. Superseded by M3 schema-aware compression.
+    #[deprecated(
+        since = "3.0.0",
+        note = "Use M3 instead. Token compression only achieves 3% token savings."
+    )]
     Token,
     /// Token-native compression (transmit token IDs directly)
     ///
@@ -90,8 +96,8 @@ impl Algorithm {
     pub fn name(&self) -> &'static str {
         match self {
             Algorithm::None => "NONE",
-            Algorithm::Token => "TOKEN (LEGACY)",
-            Algorithm::TokenNative => "TOKEN_NATIVE (LEGACY)",
+            Algorithm::Token => "TOKEN (DEPRECATED)",
+            Algorithm::TokenNative => "TOKEN_NATIVE",
             Algorithm::M3 => "M3",
             Algorithm::Brotli => "BROTLI",
             Algorithm::Zlib => "ZLIB (DEPRECATED)",
@@ -107,7 +113,6 @@ impl Algorithm {
         &[
             Algorithm::M3,
             Algorithm::TokenNative,
-            Algorithm::Token,
             Algorithm::Brotli,
             Algorithm::None,
         ]

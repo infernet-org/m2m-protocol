@@ -1,5 +1,7 @@
 //! Token-optimized compression (Algorithm::Token).
 //!
+//! **DEPRECATED**: Use M3 instead. Token compression only achieves 3% token savings.
+//!
 //! Optimizes JSON for LLM tokenizer efficiency through:
 //! - Pattern replacement (multi-token patterns -> single control char)
 //! - Key abbreviation (only those verified to save tokens)
@@ -21,6 +23,8 @@
 //!    tokens when abbreviated are NOT changed.
 //!
 //! 3. **Default Removal** (low ROI): Removes common default values.
+
+#![allow(deprecated)] // Self-referential deprecation
 
 use serde_json::{Map, Value};
 

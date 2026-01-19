@@ -34,11 +34,9 @@ impl Default for CompressionCaps {
             // M3 is first preference for M2M (best for schema-aware compression)
             // TokenNative is second (good for small-medium JSON)
             // Brotli is third (best for large content)
-            // Token is fourth (abbreviation-based fallback)
             algorithms: vec![
                 Algorithm::M3,
                 Algorithm::TokenNative,
-                Algorithm::Token,
                 Algorithm::Brotli,
                 Algorithm::None,
             ],
@@ -274,6 +272,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_no_common_algorithm() {
         let caps1 = CompressionCaps {
             algorithms: vec![Algorithm::Token],

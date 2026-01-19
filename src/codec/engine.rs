@@ -197,6 +197,9 @@ impl CodecEngine {
     /// - Communicating over established M2M sessions
     /// - Token efficiency is the primary goal
     /// - Both sides have negotiated Token compression capability
+    ///
+    /// **DEPRECATED**: Use `compress()` with `Algorithm::M3` instead.
+    #[allow(deprecated)]
     pub fn compress_m2m(&self, content: &str, encoding: Encoding) -> Result<CompressionResult> {
         let value: Value = serde_json::from_str(content)?;
         let original_tokens = count_tokens_with_encoding(content, encoding);
@@ -459,12 +462,7 @@ impl CodecEngine {
         let mut best: Option<CompressionResult> = None;
 
         // Try each algorithm (M3 first as best for schema-aware compression)
-        for algo in [
-            Algorithm::M3,
-            Algorithm::TokenNative,
-            Algorithm::Token,
-            Algorithm::Brotli,
-        ] {
+        for algo in [Algorithm::M3, Algorithm::TokenNative, Algorithm::Brotli] {
             if let Ok(result) = self.compress(content, algo) {
                 let is_better = match &best {
                     None => true,
@@ -580,8 +578,8 @@ mod tests {
         let content = r#"{"model":"gpt-4o","messages":[{"role":"user","content":"Test message"}]}"#;
         let algo = engine.select_algorithm_for_content(content);
 
-        // Hydra should select TokenNative for small LLM API content
-        assert_eq!(algo, Algorithm::TokenNative);
+        // Hydra should select M3 for small LLM API content
+        assert_eq!(algo, Algorithm::M3);
     }
 
     #[test]
