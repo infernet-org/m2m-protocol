@@ -190,13 +190,13 @@ impl Default for HydraModel {
 }
 
 impl HydraModel {
-    /// Default model vocabulary size (Hydra v1.0)
-    const DEFAULT_MODEL_VOCAB_SIZE: usize = 32_000;
+    /// Default model vocabulary size (Hydra v1.0 uses byte-level tokenization)
+    const DEFAULT_MODEL_VOCAB_SIZE: usize = 256;
 
-    /// Create new model (unloaded, with fallback tokenizer)
+    /// Create new model (unloaded, with byte-level tokenizer)
     pub fn new() -> Self {
         Self {
-            tokenizer: super::tokenizer::boxed(FallbackTokenizer::with_vocab_size(128_000)),
+            tokenizer: super::tokenizer::boxed(FallbackTokenizer::new()),
             loaded: false,
             model_path: None,
             use_fallback: true,
@@ -208,7 +208,7 @@ impl HydraModel {
     /// Create model with fallback only (no neural inference)
     pub fn fallback_only() -> Self {
         Self {
-            tokenizer: super::tokenizer::boxed(FallbackTokenizer::with_vocab_size(128_000)),
+            tokenizer: super::tokenizer::boxed(FallbackTokenizer::new()),
             loaded: false,
             model_path: None,
             use_fallback: true,
@@ -259,10 +259,8 @@ impl HydraModel {
         };
 
         // Load tokenizer (falls back to byte-level if not found)
-        let tokenizer = load_tokenizer(
-            tokenizer_path.as_deref(),
-            128_000, // Llama 3 vocab size for fallback
-        )?;
+        // Hydra v1.0 uses byte-level tokenization (vocab_size: 256)
+        let tokenizer = load_tokenizer(tokenizer_path.as_deref(), Self::DEFAULT_MODEL_VOCAB_SIZE)?;
 
         tracing::info!(
             "Using {} tokenizer (vocab: {})",

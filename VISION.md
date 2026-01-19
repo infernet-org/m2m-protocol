@@ -197,26 +197,24 @@ Caveat: "Unsolved" may be strong; "under-addressed" is more accurate.
 │ ✓ Dual task heads: compression (4-class) + security (2-class)  │
 │ ✓ Heuristic fallback when model unavailable                    │
 │ ✓ Integration in HydraModel.predict_compression/security()     │
-│ ✓ Tokenizer trait with Llama3, tiktoken, fallback backends     │
-│ ✓ Vocab mismatch handling (128K tokenizer → 32K model clamp)   │
+│ ✓ Tokenizer trait with Llama3, tiktoken, fallback backends │
+│ ✓ Byte-level tokenization matches model (no vocab mismatch)│
 │                                                                │
-│ ACTUAL ARCHITECTURE (from model inspection):                   │
-│   vocab_size: 32000 (model v1.0)                               │
-│   hidden_size: 192                                             │
-│   num_layers: 4                                                │
-│   num_experts: 4, top_k: 2                                     │
-│   model_size: ~38MB safetensors                                │
+│ ACTUAL ARCHITECTURE (from config.json):                    │
+│   vocab_size: 256 (byte-level tokenization)                │
+│   hidden_size: 256                                         │
+│   num_layers: 6                                            │
+│   num_experts: 4, top_k: 2                                 │
+│   model_size: ~38MB safetensors                            │
+│                                                            │
+│ TOKENIZER:                                                 │
+│   Byte-level (no BPE) - input is raw bytes 0-255           │
+│   FallbackTokenizer is the correct tokenizer               │
 │                                                                │
-│ TOKENIZER SUPPORT:                                             │
-│   Primary: Llama 3 (128K vocab) - downloaded separately        │
-│   Secondary: tiktoken o200k_base, cl100k_base                  │
-│   Fallback: byte-level when tokenizer unavailable              │
-│                                                                │
-│ WHAT NEEDS WORK:                                               │
-│ ○ Retrain model with 128K vocab to eliminate clamping          │
-│ ○ Accuracy validation on real traffic                          │
-│ ○ Latency benchmarks                                           │
-│ ○ Adversarial robustness testing                               │
+│ WHAT NEEDS WORK:                                           │
+│ ○ Accuracy validation on real traffic                      │
+│ ○ Latency benchmarks                                       │
+│ ○ Adversarial robustness testing                           │
 │                                                                │
 │ PERFORMANCE (measured):                                        │
 │   Model load: ~250ms (one-time)                                │

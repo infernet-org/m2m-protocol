@@ -30,11 +30,11 @@ use crate::error::{M2MError, Result};
 /// Model configuration derived from actual weights
 #[derive(Debug, Clone)]
 pub struct HydraConfig {
-    /// Vocabulary size (32000 for Hydra)
+    /// Vocabulary size (256 for Hydra v1.0 - byte-level)
     pub vocab_size: usize,
-    /// Hidden dimension (192 for Hydra)
+    /// Hidden dimension (256 for Hydra)
     pub hidden_size: usize,
-    /// Number of MoE layers (4 for Hydra)
+    /// Number of MoE layers (6 for Hydra)
     pub num_layers: usize,
     /// Number of experts per layer (4 for Hydra)
     pub num_experts: usize,
@@ -44,11 +44,11 @@ pub struct HydraConfig {
 
 impl Default for HydraConfig {
     fn default() -> Self {
-        // Values derived from actual model.safetensors inspection
+        // Values from actual config.json on HuggingFace (infernet/hydra)
         Self {
-            vocab_size: 32000,
-            hidden_size: 192,
-            num_layers: 4,
+            vocab_size: 256,
+            hidden_size: 256,
+            num_layers: 6,
             num_experts: 4,
             top_k_experts: 2,
         }
