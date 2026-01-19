@@ -1,6 +1,6 @@
-//! Token-optimized compression (Algorithm::Token).
+//! Token-optimized compression (legacy, deprecated).
 //!
-//! **DEPRECATED**: Use M3 instead. Token compression only achieves 3% token savings.
+//! **DEPRECATED**: Use M2M codec instead. Token compression only achieves 3% token savings.
 //!
 //! Optimizes JSON for LLM tokenizer efficiency through:
 //! - Pattern replacement (multi-token patterns -> single control char)
@@ -24,16 +24,16 @@
 //!
 //! 3. **Default Removal** (low ROI): Removes common default values.
 
-#![allow(deprecated)] // Self-referential deprecation
-
 use serde_json::{Map, Value};
 
 use super::tables::{
     is_default_value, KEY_ABBREV, KEY_EXPAND, MODEL_ABBREV, MODEL_EXPAND, PATTERN_ABBREV,
     PATTERN_EXPAND, ROLE_ABBREV, ROLE_EXPAND,
 };
-use super::{Algorithm, CompressionResult};
 use crate::error::Result;
+
+/// Wire format prefix for token codec
+pub const TOKEN_PREFIX: &str = "#T1|";
 
 /// Token compressor using pattern replacement and key/value abbreviation
 #[derive(Clone)]
@@ -74,7 +74,10 @@ impl TokenCodec {
     }
 
     /// Compress JSON value to token-optimized format
-    pub fn compress(&self, value: &Value) -> Result<CompressionResult> {
+    ///
+    /// **DEPRECATED**: Use M2M codec instead.
+    #[deprecated(note = "Use M2M codec instead")]
+    pub fn compress(&self, value: &Value) -> Result<(String, usize, usize)> {
         let original = serde_json::to_string(value)?;
 
         // Step 1: Apply structural transformations (key abbreviation, role/model abbreviation)
@@ -88,15 +91,10 @@ impl TokenCodec {
         }
 
         // Wire format: #T1|{compressed_json}
-        let wire = format!("#T1|{compressed_json}");
+        let wire = format!("{TOKEN_PREFIX}{compressed_json}");
         let wire_len = wire.len();
 
-        Ok(CompressionResult::new(
-            wire,
-            Algorithm::Token,
-            original.len(),
-            wire_len,
-        ))
+        Ok((wire, original.len(), wire_len))
     }
 
     /// Compress only (no wire format prefix)
@@ -113,7 +111,7 @@ impl TokenCodec {
 
     /// Decompress from wire format
     pub fn decompress(&self, wire: &str) -> Result<Value> {
-        let json_str = wire.strip_prefix("#T1|").unwrap_or(wire);
+        let json_str = wire.strip_prefix(TOKEN_PREFIX).unwrap_or(wire);
 
         // Expand patterns first
         let expanded_json = self.apply_pattern_expansion(json_str);
@@ -333,6 +331,7 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    #[allow(deprecated)]
     fn test_compress_basic() {
         let codec = TokenCodec::new();
         let input = json!({
@@ -342,15 +341,16 @@ mod tests {
             ]
         });
 
-        let result = codec.compress(&input).unwrap();
-        assert!(result.data.starts_with("#T1|"));
+        let (data, _, _) = codec.compress(&input).unwrap();
+        assert!(data.starts_with("#T1|"));
         // Model should be abbreviated (saves tokens)
-        assert!(result.data.contains("\"M\":\"g4o\"") || result.data.contains("\"M\": \"g4o\""));
+        assert!(data.contains("\"M\":\"g4o\"") || data.contains("\"M\": \"g4o\""));
         // Content should be abbreviated (saves tokens)
-        assert!(result.data.contains("\"c\""));
+        assert!(data.contains("\"c\""));
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_pattern_compression() {
         let codec = TokenCodec::new();
         let input = json!({
@@ -360,20 +360,21 @@ mod tests {
             ]
         });
 
-        let result = codec.compress(&input).unwrap();
+        let (data, _, _) = codec.compress(&input).unwrap();
 
         // Pattern replacement should have been applied
         // The pattern {"role":"user","content":" should be replaced with \u0001
         // Note: This depends on the exact JSON serialization order
-        println!("Compressed: {}", result.data);
+        println!("Compressed: {}", data);
 
         // Verify roundtrip works
-        let decompressed = codec.decompress(&result.data).unwrap();
+        let decompressed = codec.decompress(&data).unwrap();
         assert_eq!(decompressed["messages"][0]["content"], "Hello");
         assert_eq!(decompressed["messages"][1]["content"], "Hi there!");
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_roundtrip() {
         let codec = TokenCodec::new();
         let input = json!({
@@ -385,8 +386,8 @@ mod tests {
             "max_tokens": 100
         });
 
-        let result = codec.compress(&input).unwrap();
-        let decompressed = codec.decompress(&result.data).unwrap();
+        let (data, _, _) = codec.compress(&input).unwrap();
+        let decompressed = codec.decompress(&data).unwrap();
 
         // Content should match
         assert_eq!(
@@ -400,6 +401,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_removes_defaults() {
         let codec = TokenCodec::new();
         let input = json!({
@@ -410,14 +412,15 @@ mod tests {
             "n": 1
         });
 
-        let result = codec.compress(&input).unwrap();
+        let (data, _, _) = codec.compress(&input).unwrap();
 
         // Defaults should be removed
-        assert!(!result.data.contains("temperature"));
-        assert!(!result.data.contains("stream"));
+        assert!(!data.contains("temperature"));
+        assert!(!data.contains("stream"));
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_role_abbreviation() {
         let codec = TokenCodec::new();
         let input = json!({
@@ -427,16 +430,17 @@ mod tests {
             ]
         });
 
-        let result = codec.compress(&input).unwrap();
+        let (data, _, _) = codec.compress(&input).unwrap();
 
         // Roles should be abbreviated to S and A
         // Note: with pattern compression, the full pattern might be replaced
-        let decompressed = codec.decompress(&result.data).unwrap();
+        let decompressed = codec.decompress(&data).unwrap();
         assert_eq!(decompressed["messages"][0]["role"], "system");
         assert_eq!(decompressed["messages"][1]["role"], "assistant");
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_default_restoration() {
         let codec = TokenCodec::new();
 
@@ -452,8 +456,8 @@ mod tests {
             "presence_penalty": 0
         });
 
-        let result = codec.compress(&input).unwrap();
-        let decompressed = codec.decompress(&result.data).unwrap();
+        let (data, _, _) = codec.compress(&input).unwrap();
+        let decompressed = codec.decompress(&data).unwrap();
 
         // Per spec 5.3.5: MUST restore omitted parameters during decompression
         assert_eq!(decompressed["temperature"], 1.0);
@@ -469,6 +473,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_default_restoration_preserves_non_defaults() {
         let codec = TokenCodec::new();
 
@@ -484,8 +489,8 @@ mod tests {
             "presence_penalty": 0.5
         });
 
-        let result = codec.compress(&input).unwrap();
-        let decompressed = codec.decompress(&result.data).unwrap();
+        let (data, _, _) = codec.compress(&input).unwrap();
+        let decompressed = codec.decompress(&data).unwrap();
 
         // Non-default values MUST be preserved exactly
         assert_eq!(decompressed["temperature"], 0.7);
@@ -497,6 +502,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_roundtrip_with_defaults_complete() {
         let codec = TokenCodec::new();
 
@@ -512,14 +518,14 @@ mod tests {
         });
 
         // Compress
-        let result = codec.compress(&original).unwrap();
+        let (data, _, _) = codec.compress(&original).unwrap();
 
         // Verify defaults were removed during compression
-        assert!(!result.data.contains("temperature"));
-        assert!(!result.data.contains("stream"));
+        assert!(!data.contains("temperature"));
+        assert!(!data.contains("stream"));
 
         // Decompress
-        let decompressed = codec.decompress(&result.data).unwrap();
+        let decompressed = codec.decompress(&data).unwrap();
 
         // Verify structural completeness - all fields restored
         assert!(decompressed.get("temperature").is_some());

@@ -156,7 +156,7 @@ fn main() {
 
     let algorithms = [
         Algorithm::None,
-        Algorithm::Token,
+        Algorithm::M2M,
         Algorithm::TokenNative,
         Algorithm::Brotli,
     ];

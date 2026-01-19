@@ -1,6 +1,6 @@
 [package]
 name = "m2m-core"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 rust-version = "1.75"
 license = "Apache-2.0"
@@ -74,6 +74,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 brotli = "7.0"
 flate2 = "1.0"  # zlib/gzip
 
+# Integrity checking
+crc32fast = "1.5"
+
 # Tensor operations (for inference)
 ndarray = "0.16"
 
@@ -88,6 +91,9 @@ base64 = "0.22"
 
 # Byte manipulation
 bytes = "1.0"
+
+# Timestamps for benchmarks
+chrono = { version = "0.4", features = ["serde"] }
 
 # Regex for pattern matching (security)
 regex = { version = "1.0", features = ["perf"] }
@@ -107,6 +113,15 @@ h3-quinn = "0.0.5"
 # Async streams for h3
 http = "1.0"
 http-body-util = "0.1"
+
+# === Optional: Cryptographic Security ===
+# Used for M2M wire format authentication and encryption
+hkdf = { version = "0.12", optional = true }
+sha2 = { version = "0.10", optional = true }
+hmac = { version = "0.12", optional = true }
+chacha20poly1305 = { version = "0.10", optional = true }
+x25519-dalek = { version = "2.0", features = ["static_secrets"], optional = true }
+rand = { version = "0.8", optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
@@ -133,6 +148,8 @@ debug = true
 
 [features]
 default = []
+# Cryptographic security for M2M wire format (HMAC, AEAD, key exchange)
+crypto = ["dep:hkdf", "dep:sha2", "dep:hmac", "dep:chacha20poly1305", "dep:x25519-dalek", "dep:rand"]
 
 # =============================================================================
 # Lints Configuration

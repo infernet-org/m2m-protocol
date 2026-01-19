@@ -31,11 +31,11 @@ pub struct CompressionCaps {
 impl Default for CompressionCaps {
     fn default() -> Self {
         Self {
-            // M3 is first preference for M2M (best for schema-aware compression)
+            // M2M is first preference (100% JSON fidelity with routing headers)
             // TokenNative is second (good for small-medium JSON)
             // Brotli is third (best for large content)
             algorithms: vec![
-                Algorithm::M3,
+                Algorithm::M2M,
                 Algorithm::TokenNative,
                 Algorithm::Brotli,
                 Algorithm::None,
@@ -272,10 +272,9 @@ mod tests {
     }
 
     #[test]
-    #[allow(deprecated)]
     fn test_no_common_algorithm() {
         let caps1 = CompressionCaps {
-            algorithms: vec![Algorithm::Token],
+            algorithms: vec![Algorithm::TokenNative],
             ..Default::default()
         };
         let caps2 = CompressionCaps {
@@ -308,7 +307,7 @@ mod tests {
         let caps2 = Capabilities::default();
 
         let negotiated = caps1.negotiate(&caps2).unwrap();
-        assert_eq!(negotiated.algorithm, Algorithm::M3); // New default
+        assert_eq!(negotiated.algorithm, Algorithm::M2M); // New default
         assert_eq!(negotiated.encoding, Encoding::Cl100kBase);
         assert!(negotiated.threat_detection); // One has it
     }

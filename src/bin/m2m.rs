@@ -50,7 +50,7 @@ enum Commands {
         #[arg(short, long)]
         output: Option<PathBuf>,
 
-        /// Compression algorithm (token, brotli, dictionary, auto)
+        /// Compression algorithm (m2m, token-native, brotli, auto)
         #[arg(short, long, default_value = "auto")]
         algorithm: String,
 
@@ -239,12 +239,12 @@ fn cmd_compress(
     // Parse algorithm
     let algo = match algorithm.to_lowercase().as_str() {
         "auto" => None,
-        "token" | "t" => Some(Algorithm::Token),
+        "m2m" | "m" => Some(Algorithm::M2M),
+        "token-native" | "tn" => Some(Algorithm::TokenNative),
         "brotli" | "br" => Some(Algorithm::Brotli),
-        "dictionary" | "dict" | "d" => Some(Algorithm::Dictionary),
         "none" | "n" => Some(Algorithm::None),
         _ => {
-            eprintln!("Unknown algorithm: {algorithm}. Use: auto, token, brotli, dictionary, none");
+            eprintln!("Unknown algorithm: {algorithm}. Use: auto, m2m, token-native, brotli, none");
             std::process::exit(1);
         },
     };
@@ -388,7 +388,7 @@ fn cmd_analyze(input: Option<String>, file: Option<PathBuf>) -> anyhow::Result<(
     // Try all algorithms
     println!();
     println!("Algorithm Comparison:");
-    for algo in [Algorithm::Token, Algorithm::Brotli, Algorithm::Dictionary] {
+    for algo in [Algorithm::M2M, Algorithm::TokenNative, Algorithm::Brotli] {
         if let Ok(result) = engine.compress(&content, algo) {
             println!(
                 "  {:?}: {} bytes -> {} bytes (ratio: {:.2}x)",

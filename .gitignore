@@ -10,6 +10,13 @@
 *.swo
 *~
 
+# AI/Editor tools
+.opencode/
+.claude/
+.cursor/
+.aider*
+.continue/
+
 # OS
 .DS_Store
 Thumbs.db
@@ -17,6 +24,7 @@ Thumbs.db
 # Environment
 .env
 .env.local
+.env.*
 
 # Models (download separately)
 /models/
@@ -41,3 +49,8 @@ website/dist/
 website/.astro/
 website/.vercel/
 website/.netlify/
+
+# Temporary files
+*.tmp
+*.bak
+*.orig

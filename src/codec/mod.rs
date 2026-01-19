@@ -7,72 +7,57 @@
 //!
 //! | Algorithm    | Wire Prefix          | Best For                        |
 //! |--------------|----------------------|---------------------------------|
-//! | [`Token`]    | `#T1\|`              | LLM API JSON (messages, roles)  |
+//! | [`M2M`]      | `#M2M\|1\|`          | All content (100% JSON fidelity)|
+//! | [`TokenNative`] | `#TK\|`           | Legacy token-based compression  |
 //! | [`Brotli`]   | `#M2M[v3.0]\|DATA:`  | Large repetitive content (>1KB) |
-//! | [`Dictionary`]| `#M2M\|`            | JSON with common patterns       |
 //! | [`None`]     | (passthrough)        | Small content (<100 bytes)      |
 //!
-//! # Token Compression
+//! # M2M Wire Format v1
 //!
-//! The Token algorithm uses domain-specific abbreviation tables to reduce
-//! common LLM API keys and values. This is optimized for token efficiency
-//! rather than pure byte reduction.
-//!
-//! **Abbreviations include:**
-//! - Keys: `messages` → `m`, `content` → `c`, `role` → `r`, `model` → `M`
-//! - Roles: `user` → `u`, `assistant` → `a`, `system` → `s`
-//! - Models: `gpt-4o` → `4o`, `claude-3-opus` → `c3o`
+//! The new M2M wire format provides:
+//! - **100% JSON fidelity**: Original JSON is perfectly reconstructed
+//! - **Header extraction**: Routing info available without decompression
+//! - **Cost estimation**: Token counts and cost in headers
+//! - **Optional encryption**: HMAC or AEAD security modes
 //!
 //! # Wire Format Examples
 //!
 //! ```text
-//! // Token compressed
-//! #T1|{"M":"4o","m":[{"r":"u","c":"Hello"}]}
+//! // M2M v1 format (default)
+//! #M2M|1|<fixed_header><routing_header><compressed_payload>
 //!
-//! // Brotli compressed (base64 encoded)
-//! #M2M[v3.0]|DATA:G5gAAI...
-//!
-//! // Dictionary compressed
-//! #M2M|<pattern_encoded_content>
+//! // Legacy formats (still supported for decoding)
+//! #TK|C|<varint_tokens>
+//! #M2M[v3.0]|DATA:<base64_brotli>
 //! ```
 //!
 //! # Usage
 //!
 //! ```rust,ignore
-//! use m2m_core::codec::{CodecEngine, Algorithm};
+//! use m2m::codec::{CodecEngine, Algorithm};
+//! use m2m::codec::m2m::M2MCodec;
 //!
+//! // New M2M codec (recommended)
+//! let m2m_codec = M2MCodec::new();
+//! let encoded = m2m_codec.encode(json)?;
+//! let decoded = m2m_codec.decode(&encoded)?; // 100% fidelity
+//!
+//! // Or use CodecEngine for auto-selection
 //! let engine = CodecEngine::new();
-//!
-//! // Auto-select best algorithm
-//! let content = r#"{"model":"gpt-4o","messages":[{"role":"user","content":"Hi"}]}"#;
-//! let (result, algo) = engine.compress_auto(content).unwrap();
-//! println!("Algorithm: {:?}, Ratio: {:.1}%", algo, result.byte_ratio() * 100.0);
-//!
-//! // Use specific algorithm
-//! let result = engine.compress(content, Algorithm::Token).unwrap();
-//!
-//! // Decompress (auto-detects from wire prefix)
-//! let original = engine.decompress(&result.data).unwrap();
+//! let result = engine.compress(content, Algorithm::M2M)?;
+//! let original = engine.decompress(&result.data)?;
 //! ```
 //!
-//! # Algorithm Selection Heuristics
-//!
-//! The [`CodecEngine::compress_auto`] method selects algorithms based on:
-//!
-//! 1. **Content analysis**: Detects LLM API patterns (messages, roles)
-//! 2. **Size thresholds**: Small content bypasses compression
-//! 3. **Repetition ratio**: High repetition favors Brotli
-//! 4. **ML routing**: Optional Hydra model for intelligent selection
-//!
-//! [`Token`]: Algorithm::Token
+//! [`M2M`]: Algorithm::M2M
+//! [`TokenNative`]: Algorithm::TokenNative
 //! [`Brotli`]: Algorithm::Brotli
-//! [`Dictionary`]: Algorithm::Dictionary
 //! [`None`]: Algorithm::None
 
 mod algorithm;
 mod brotli;
 mod dictionary;
 mod engine;
+pub mod m2m;
 mod m3;
 mod streaming;
 mod tables;
@@ -83,6 +68,7 @@ pub use algorithm::{Algorithm, CompressionResult};
 pub use brotli::BrotliCodec;
 pub use dictionary::DictionaryCodec;
 pub use engine::{CodecEngine, ContentAnalysis};
+pub use m2m::{M2MCodec, M2MFrame};
 pub use m3::{M3ChatRequest, M3Codec, M3Message, M3_PREFIX};
 pub use streaming::{
     SseEvent, StreamingCodec, StreamingDecompressor, StreamingMode, StreamingStats,
@@ -96,29 +82,12 @@ pub use token_native::TokenNativeCodec;
 
 /// Check if content is in M2M compressed format
 pub fn is_m2m_format(content: &str) -> bool {
-    content.starts_with("#M3|")
-        || content.starts_with("#M2M")
-        || content.starts_with("#T1|")
-        || content.starts_with("#TK|")
+    content.starts_with("#M2M|1|")  // M2M v1 format (default)
+        || content.starts_with("#TK|")  // TokenNative
+        || content.starts_with("#M2M[v3.0]|") // Brotli
 }
 
 /// Detect the compression algorithm used in a message
-#[allow(deprecated)]
 pub fn detect_algorithm(content: &str) -> Option<Algorithm> {
-    if content.starts_with("#M3|") {
-        Some(Algorithm::M3)
-    } else if content.starts_with("#TK|") {
-        Some(Algorithm::TokenNative)
-    } else if content.starts_with("#T1|") {
-        Some(Algorithm::Token)
-    } else if content.starts_with("#M2M[v3.0]|") {
-        Some(Algorithm::Brotli)
-    } else if content.starts_with("#M2M[v2.0]|") {
-        // v2.0 format (Zlib) - deprecated but detected for backwards compatibility
-        Some(Algorithm::Zlib)
-    } else if content.starts_with("#M2M[v1.0]|") || content.starts_with("#M2M|") {
-        Some(Algorithm::Dictionary)
-    } else {
-        None
-    }
+    Algorithm::from_prefix(content)
 }

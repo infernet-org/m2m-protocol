@@ -186,7 +186,7 @@ async fn compress(
         }
     }
 
-    let algorithm = req.algorithm.unwrap_or(Algorithm::M3);
+    let algorithm = req.algorithm.unwrap_or(Algorithm::M2M);
 
     match state.codec.compress(&req.content, algorithm) {
         Ok(result) => (

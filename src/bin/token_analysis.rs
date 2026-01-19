@@ -303,7 +303,7 @@ fn debug_compression() {
     let engine = CodecEngine::new();
 
     let original = r#"{"model":"gpt-4o","messages":[{"role":"user","content":"Hello"}]}"#;
-    let result = engine.compress(original, Algorithm::Token).unwrap();
+    let result = engine.compress(original, Algorithm::M2M).unwrap();
 
     println!("\n--- DEBUG COMPRESSION ---");
     println!("Original:   {}", original);
@@ -312,8 +312,8 @@ fn debug_compression() {
     println!("Compressed tokens: {}", count_tokens(&result.data));
 
     println!("\n--- PREFIX TOKEN COSTS ---");
-    let prefixes = ["#T1|", "#1|", "#T|", "~", "~1", "#", "\u{0001}"];
+    let prefixes = ["#M2M|1|", "#TK|", "#M2M[v3.0]|DATA:", "~", "#"];
     for p in &prefixes {
-        println!("  {:10} = {} tokens", format!("{:?}", p), count_tokens(p));
+        println!("  {:20} = {} tokens", format!("{:?}", p), count_tokens(p));
     }
 }

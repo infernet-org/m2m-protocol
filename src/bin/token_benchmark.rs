@@ -1,10 +1,10 @@
 //! Token Savings Benchmark
 //!
-//! Validates the token-optimized compression achieves >= 20% token savings.
+//! Validates M2M compression achieves good token savings.
 //!
 //! Run with: cargo run --bin token_benchmark
 
-use m2m::codec::CodecEngine;
+use m2m::codec::{Algorithm, CodecEngine};
 use m2m::models::Encoding;
 use serde_json::json;
 
@@ -133,8 +133,10 @@ fn main() {
     for (name, payload) in &payloads {
         let content = serde_json::to_string(payload).unwrap();
 
-        // Use M2M compression (no wire prefix overhead)
-        let result = engine.compress_m2m(&content, encoding).unwrap();
+        // Use M2M compression with token tracking
+        let result = engine
+            .compress_with_tokens(&content, Algorithm::M2M, encoding)
+            .unwrap();
 
         let original_tokens = result.original_tokens.unwrap();
         let compressed_tokens = result.compressed_tokens.unwrap();
@@ -216,7 +218,9 @@ fn main() {
         });
 
         let content = serde_json::to_string(&payload).unwrap();
-        let result = engine.compress_m2m(&content, encoding).unwrap();
+        let result = engine
+            .compress_with_tokens(&content, Algorithm::M2M, encoding)
+            .unwrap();
 
         let original_tokens = result.original_tokens.unwrap();
         let compressed_tokens = result.compressed_tokens.unwrap();

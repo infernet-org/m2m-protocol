@@ -1,18 +1,19 @@
-//! Dictionary-based compression (Algorithm::Dictionary).
+//! Dictionary-based compression (legacy, deprecated).
 //!
 //! Uses lookup tables for common JSON patterns in LLM API requests/responses.
 //! Optimized for structured, repetitive content.
 //!
-//! **DEPRECATED**: Use M3 instead. Dictionary has negative compression.
-
-#![allow(deprecated)] // Self-referential deprecation
+//! **DEPRECATED**: This module is kept for backwards compatibility with
+//! legacy wire formats. Use M2M codec for new implementations.
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use serde_json::Value;
 use std::collections::HashMap;
 
-use super::{Algorithm, CompressionResult};
 use crate::error::Result;
+
+/// Wire format prefix for dictionary codec
+pub const DICTIONARY_PREFIX: &str = "#M2M|";
 
 /// Common patterns encoded as single bytes (0x80-0xFF range)
 const PATTERN_START: u8 = 0x80;
@@ -101,17 +102,15 @@ impl DictionaryCodec {
     }
 
     /// Compress JSON string using dictionary patterns
-    pub fn compress(&self, content: &str) -> Result<CompressionResult> {
+    ///
+    /// **DEPRECATED**: Use M2M codec instead.
+    #[deprecated(note = "Use M2M codec instead")]
+    pub fn compress(&self, content: &str) -> Result<(String, usize, usize)> {
         if content.len() < self.min_length {
             // Too short, return as-is with prefix
-            let wire = format!("#M2M|{content}");
+            let wire = format!("{DICTIONARY_PREFIX}{content}");
             let wire_len = wire.len();
-            return Ok(CompressionResult::new(
-                wire,
-                Algorithm::Dictionary,
-                content.len(),
-                wire_len,
-            ));
+            return Ok((wire, content.len(), wire_len));
         }
 
         let compressed = if self.use_patterns {
@@ -122,20 +121,15 @@ impl DictionaryCodec {
 
         // Encode as base64 for wire format
         let encoded = BASE64.encode(&compressed);
-        let wire = format!("#M2M|{encoded}");
+        let wire = format!("{DICTIONARY_PREFIX}{encoded}");
         let wire_len = wire.len();
 
-        Ok(CompressionResult::new(
-            wire,
-            Algorithm::Dictionary,
-            content.len(),
-            wire_len,
-        ))
+        Ok((wire, content.len(), wire_len))
     }
 
     /// Decompress from wire format
     pub fn decompress(&self, wire: &str) -> Result<String> {
-        let data = wire.strip_prefix("#M2M|").unwrap_or(wire);
+        let data = wire.strip_prefix(DICTIONARY_PREFIX).unwrap_or(wire);
 
         // Try to decode as base64
         match BASE64.decode(data) {
@@ -204,7 +198,11 @@ impl DictionaryCodec {
     }
 
     /// Compress JSON value directly
-    pub fn compress_value(&self, value: &Value) -> Result<CompressionResult> {
+    ///
+    /// **DEPRECATED**: Use M2M codec instead.
+    #[deprecated(note = "Use M2M codec instead")]
+    #[allow(deprecated)]
+    pub fn compress_value(&self, value: &Value) -> Result<(String, usize, usize)> {
         let json = serde_json::to_string(value)?;
         self.compress(&json)
     }
@@ -222,18 +220,20 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(deprecated)]
     fn test_compress_short() {
         let codec = DictionaryCodec::new();
         let content = r#"{"model":"gpt-4o"}"#;
 
-        let result = codec.compress(content).unwrap();
-        assert!(result.data.starts_with("#M2M|"));
+        let (data, _, _) = codec.compress(content).unwrap();
+        assert!(data.starts_with("#M2M|"));
 
-        let decompressed = codec.decompress(&result.data).unwrap();
+        let decompressed = codec.decompress(&data).unwrap();
         assert_eq!(decompressed, content);
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_compress_with_patterns() {
         let content = r#"{"messages":[{"role":"user","content":"Hello"}]}"#;
 
@@ -241,14 +241,15 @@ mod tests {
         let mut codec = DictionaryCodec::new();
         codec.min_length = 0;
 
-        let result = codec.compress(content).unwrap();
-        assert!(result.data.starts_with("#M2M|"));
+        let (data, _, _) = codec.compress(content).unwrap();
+        assert!(data.starts_with("#M2M|"));
 
-        let decompressed = codec.decompress(&result.data).unwrap();
+        let decompressed = codec.decompress(&data).unwrap();
         assert_eq!(decompressed, content);
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_compress_request() {
         let codec = DictionaryCodec {
             min_length: 0,
@@ -257,17 +258,16 @@ mod tests {
 
         let content = r#"{"model":"gpt-4o","messages":[{"role":"system","content":"Be helpful"},{"role":"user","content":"Hello"}]}"#;
 
-        let result = codec.compress(content).unwrap();
+        let (data, original_len, compressed_len) = codec.compress(content).unwrap();
 
         // Verify roundtrip
-        let decompressed = codec.decompress(&result.data).unwrap();
+        let decompressed = codec.decompress(&data).unwrap();
         assert_eq!(decompressed, content);
 
         // Should achieve some compression due to patterns
         println!(
             "Original: {} bytes, Wire: {} bytes",
-            content.len(),
-            result.data.len()
+            original_len, compressed_len
         );
     }
 

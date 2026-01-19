@@ -25,6 +25,7 @@
 //! For streaming, we use lightweight token abbreviation (no Brotli) to minimize
 //! latency per chunk. Full compression can be applied to the accumulated response.
 
+use super::m2m::M2MFrame;
 use super::token_native::TokenNativeCodec;
 use super::CompressionResult;
 use crate::codec::tables::{
@@ -321,6 +322,35 @@ impl StreamingCodec {
     /// For binary-safe channels, returns raw VarInt-encoded token IDs.
     pub fn finalize_raw(&self) -> Vec<u8> {
         self.token_native.compress_raw(&self.accumulated_content)
+    }
+
+    /// Finalize streaming with M2M frame encoding
+    ///
+    /// Wraps the accumulated content in an M2M response frame with:
+    /// - Response headers (model, token counts if available)
+    /// - Brotli compression for large content
+    /// - CRC32 integrity check
+    ///
+    /// This is useful when you want to store or transmit the final
+    /// accumulated response with full M2M wire format benefits.
+    ///
+    /// # Arguments
+    /// * `response_json` - Complete response JSON to wrap (should include the accumulated content)
+    ///
+    /// # Returns
+    /// M2M-encoded response as a string (base64 format for text transport)
+    pub fn finalize_m2m(&self, response_json: &str) -> Result<String> {
+        let frame = M2MFrame::new_response(response_json)?;
+        frame.encode_string()
+    }
+
+    /// Finalize streaming with M2M frame encoding (binary)
+    ///
+    /// Same as `finalize_m2m` but returns raw bytes instead of base64.
+    /// Use this for binary-safe transport channels.
+    pub fn finalize_m2m_binary(&self, response_json: &str) -> Result<Vec<u8>> {
+        let frame = M2MFrame::new_response(response_json)?;
+        frame.encode()
     }
 
     /// Get compression statistics
@@ -730,5 +760,56 @@ mod tests {
             "Expected expanded JSON, got: {}",
             text
         );
+    }
+
+    #[test]
+    fn test_finalize_m2m() {
+        use crate::codec::m2m::{M2MCodec, M2M_PREFIX};
+
+        let mut codec = StreamingCodec::new();
+
+        // Simulate streaming chunks
+        let chunks = vec![
+            br#"data: {"choices":[{"delta":{"content":"Hello"}}]}"#.as_slice(),
+            br#"data: {"choices":[{"delta":{"content":" world"}}]}"#.as_slice(),
+            br#"data: {"choices":[{"delta":{"content":"!"}}]}"#.as_slice(),
+        ];
+
+        for chunk in chunks {
+            codec.process_chunk(chunk).unwrap();
+        }
+
+        assert_eq!(codec.accumulated_content(), "Hello world!");
+
+        // Create a complete response JSON with the accumulated content
+        let response_json = r#"{"id":"chatcmpl-123","object":"chat.completion","model":"gpt-4o","choices":[{"index":0,"message":{"role":"assistant","content":"Hello world!"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":3,"total_tokens":13}}"#;
+
+        // Finalize with M2M framing
+        let m2m_encoded = codec.finalize_m2m(response_json).unwrap();
+        assert!(m2m_encoded.starts_with(M2M_PREFIX));
+
+        // Decode and verify 100% fidelity
+        let m2m_codec = M2MCodec::new();
+        let decoded = m2m_codec.decode_string(&m2m_encoded).unwrap();
+        assert_eq!(decoded, response_json);
+    }
+
+    #[test]
+    fn test_finalize_m2m_binary() {
+        use crate::codec::m2m::{M2MCodec, M2M_PREFIX};
+
+        let codec = StreamingCodec::new();
+
+        let response_json =
+            r#"{"id":"chatcmpl-456","model":"gpt-4o","choices":[{"message":{"content":"Test"}}]}"#;
+
+        // Finalize with M2M binary framing
+        let m2m_binary = codec.finalize_m2m_binary(response_json).unwrap();
+        assert!(m2m_binary.starts_with(M2M_PREFIX.as_bytes()));
+
+        // Decode and verify
+        let m2m_codec = M2MCodec::new();
+        let decoded = m2m_codec.decode(&m2m_binary).unwrap();
+        assert_eq!(decoded, response_json);
     }
 }

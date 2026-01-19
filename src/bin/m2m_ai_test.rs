@@ -349,7 +349,7 @@ fn compress_and_measure(
     let original_tokens = tokenizer.encode_ordinary(json_str).len();
 
     let start = Instant::now();
-    let compressed = codec.compress(json_str, Algorithm::Token)?;
+    let compressed = codec.compress(json_str, Algorithm::M2M)?;
     let compression_time_ms = start.elapsed().as_secs_f64() * 1000.0;
 
     let compressed_bytes = compressed.data.len();

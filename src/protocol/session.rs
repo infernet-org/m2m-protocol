@@ -246,7 +246,7 @@ impl Session {
             return Err(M2MError::SessionExpired);
         }
 
-        let algorithm = self.algorithm().unwrap_or(Algorithm::M3);
+        let algorithm = self.algorithm().unwrap_or(Algorithm::M2M);
         let result = self.codec.compress(content, algorithm)?;
 
         // Update stats
@@ -572,9 +572,9 @@ mod tests {
         let accept = server.process_hello(&hello).unwrap();
         client.process_accept(&accept).unwrap();
 
-        // M3 should be the default negotiated algorithm
-        assert_eq!(client.algorithm(), Some(Algorithm::M3));
-        assert_eq!(server.algorithm(), Some(Algorithm::M3));
+        // M2M should be the default negotiated algorithm
+        assert_eq!(client.algorithm(), Some(Algorithm::M2M));
+        assert_eq!(server.algorithm(), Some(Algorithm::M2M));
 
         // Encoding should be cl100k (default)
         assert_eq!(client.encoding(), Some(Encoding::Cl100kBase));

@@ -240,14 +240,14 @@ fn test_session_stats_tracking() {
 /// Test capabilities negotiation with different algorithm preferences
 #[test]
 fn test_capabilities_algorithm_negotiation() {
-    // Client prefers Token, Brotli
+    // Client prefers TokenNative, Brotli
     let client_compression =
-        CompressionCaps::default().with_algorithms(vec![Algorithm::Token, Algorithm::Brotli]);
+        CompressionCaps::default().with_algorithms(vec![Algorithm::TokenNative, Algorithm::Brotli]);
     let client_caps = Capabilities::default().with_compression(client_compression);
 
-    // Server prefers Brotli, Token
+    // Server prefers Brotli, TokenNative
     let server_compression =
-        CompressionCaps::default().with_algorithms(vec![Algorithm::Brotli, Algorithm::Token]);
+        CompressionCaps::default().with_algorithms(vec![Algorithm::Brotli, Algorithm::TokenNative]);
     let server_caps = Capabilities::default().with_compression(server_compression);
 
     let mut client = Session::new(client_caps);
@@ -259,7 +259,7 @@ fn test_capabilities_algorithm_negotiation() {
 
     // Should negotiate to a common algorithm
     let algo = client.algorithm().unwrap();
-    assert!(algo == Algorithm::Token || algo == Algorithm::Brotli);
+    assert!(algo == Algorithm::TokenNative || algo == Algorithm::Brotli);
 }
 
 /// Test that process_message dispatches correctly

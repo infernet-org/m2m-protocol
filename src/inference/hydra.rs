@@ -66,36 +66,25 @@ pub struct CompressionDecision {
 #[derive(Debug, Clone, Default)]
 pub struct AlgorithmProbs {
     pub none: f32,
-    pub token: f32,
     pub token_native: f32,
-    pub m3: f32,
+    /// M2M wire format (100% JSON fidelity)
+    pub m2m: f32,
     pub brotli: f32,
-    pub zlib: f32,
-    pub dictionary: f32,
 }
 
 impl AlgorithmProbs {
     /// Get the highest probability algorithm
-    #[allow(deprecated)]
     pub fn best(&self) -> (Algorithm, f32) {
         let mut best = (Algorithm::None, self.none);
-        if self.m3 > best.1 {
-            best = (Algorithm::M3, self.m3);
+
+        if self.m2m > best.1 {
+            best = (Algorithm::M2M, self.m2m);
         }
         if self.token_native > best.1 {
             best = (Algorithm::TokenNative, self.token_native);
         }
-        if self.token > best.1 {
-            best = (Algorithm::Token, self.token);
-        }
         if self.brotli > best.1 {
             best = (Algorithm::Brotli, self.brotli);
-        }
-        if self.zlib > best.1 {
-            best = (Algorithm::Zlib, self.zlib);
-        }
-        if self.dictionary > best.1 {
-            best = (Algorithm::Dictionary, self.dictionary);
         }
         best
     }
@@ -393,7 +382,7 @@ impl HydraModel {
             (Algorithm::None, probs[0]),
             (Algorithm::TokenNative, probs[1]), // BPE -> TokenNative
             (Algorithm::Brotli, probs[2]),
-            (Algorithm::Zlib, probs[3]),
+            (Algorithm::M2M, probs[3]), // Map legacy zlib output to M2M
         ];
 
         let (best_algo, confidence) = algorithms
@@ -407,12 +396,9 @@ impl HydraModel {
             confidence,
             probabilities: AlgorithmProbs {
                 none: probs[0],
-                token: 0.0,
                 token_native: probs[1],
-                m3: 0.0, // BitNet model doesn't output M3 probability yet
+                m2m: probs[3], // Map legacy zlib output to M2M
                 brotli: probs[2],
-                zlib: probs[3],
-                dictionary: 0.0,
             },
         })
     }
@@ -494,11 +480,11 @@ impl HydraModel {
 
     /// Heuristic-based compression prediction
     ///
-    /// Uses epistemic analysis to select optimal algorithm:
-    /// - K (known): M3 achieves ~60% compression on LLM API JSON
-    /// - K (known): TokenNative achieves ~50% compression on raw bytes
-    /// - K (known): Brotli is optimal for large repetitive content
-    /// - B (believed): M3 is best for LLM API JSON (schema-aware compression)
+    /// Epistemic basis:
+    /// - K (known): Content length correlates with compression efficiency
+    /// - K: Repetitive content benefits from dictionary compression
+    /// - K: Small content (<100 bytes) doesn't benefit from compression
+    /// - B (believed): M2M is best for LLM API JSON (100% fidelity + routing headers)
     fn predict_compression_heuristic(&self, content: &str) -> Result<CompressionDecision> {
         let len = content.len();
         // Estimate tokens (~4 chars per token for English)
@@ -512,18 +498,18 @@ impl HydraModel {
         // Build probability scores
         let mut probs = AlgorithmProbs::default();
 
-        // LLM API JSON: M3 (best for schema-aware compression)
-        // Epistemic: K - M3 achieves ~60% byte compression for LLM API
+        // LLM API JSON: M2M (best for 100% fidelity + routing headers)
+        // Epistemic: K - M2M preserves JSON exactly while extracting routing info
         if is_llm_api {
             if len < 2048 {
-                // Small-medium LLM API: M3 wins (schema-aware)
-                probs.m3 = 0.85;
+                // Small-medium LLM API: M2M wins (100% fidelity)
+                probs.m2m = 0.85;
                 probs.token_native = 0.1;
                 probs.brotli = 0.05;
             } else {
                 // Large LLM API: Brotli wins due to dictionary compression
                 probs.brotli = 0.6;
-                probs.m3 = 0.3;
+                probs.m2m = 0.3;
                 probs.token_native = 0.1;
             }
         }
@@ -531,31 +517,31 @@ impl HydraModel {
         // Epistemic: K - Compression overhead exceeds savings
         else if len < 100 || estimated_tokens < 25 {
             probs.none = 0.9;
-            probs.m3 = 0.1;
+            probs.m2m = 0.1;
         }
         // Large repetitive content: BROTLI
         // Epistemic: K - Brotli's dictionary compression excels here
         else if len > 1024 && has_repetition > 0.3 {
             probs.brotli = 0.8;
-            probs.m3 = 0.15;
+            probs.m2m = 0.15;
             probs.token_native = 0.05;
         }
-        // Medium JSON: M3 or TokenNative
-        // Epistemic: B - M3 likely better for JSON structures
+        // Medium JSON: M2M or TokenNative
+        // Epistemic: B - M2M likely better for JSON structures
         else if is_json && len > 200 && len < 1024 {
-            probs.m3 = 0.5;
+            probs.m2m = 0.5;
             probs.token_native = 0.35;
             probs.brotli = 0.15;
         }
         // Large JSON: Brotli
         else if is_json && len >= 1024 {
             probs.brotli = 0.6;
-            probs.m3 = 0.25;
+            probs.m2m = 0.25;
             probs.token_native = 0.15;
         }
-        // Default: M3 for M2M
+        // Default: M2M for M2M protocol
         else {
-            probs.m3 = 0.5;
+            probs.m2m = 0.5;
             probs.token_native = 0.3;
             probs.none = 0.2;
         }
@@ -672,11 +658,11 @@ mod tests {
         let decision = model.predict_compression("hi").unwrap();
         assert_eq!(decision.algorithm, Algorithm::None);
 
-        // LLM API JSON -> M3 (schema-aware compression)
+        // LLM API JSON -> M2M (100% JSON fidelity)
         let llm_content =
             r#"{"model":"gpt-4o","messages":[{"role":"user","content":"Hello world!"}]}"#;
         let decision = model.predict_compression(llm_content).unwrap();
-        assert_eq!(decision.algorithm, Algorithm::M3);
+        assert_eq!(decision.algorithm, Algorithm::M2M);
     }
 
     #[test]
@@ -726,19 +712,16 @@ mod tests {
     }
 
     #[test]
-    fn test_algorithm_probs() {
+    fn test_algorithm_probs_best() {
         let probs = AlgorithmProbs {
             none: 0.1,
-            token: 0.2,
             token_native: 0.3,
-            m3: 0.6,
+            m2m: 0.6,
             brotli: 0.05,
-            zlib: 0.025,
-            dictionary: 0.025,
         };
 
         let (best, conf) = probs.best();
-        assert_eq!(best, Algorithm::M3);
+        assert_eq!(best, Algorithm::M2M);
         assert!((conf - 0.6).abs() < 0.001);
     }
 
@@ -799,7 +782,7 @@ mod tests {
         println!("COMPRESSION PREDICTIONS:\n");
         println!(
             "{:<20} {:>8} {:>8} {:>8} {:>8} | {:<12}",
-            "Case", "NONE", "BPE", "BROTLI", "ZLIB", "Prediction"
+            "Case", "NONE", "TK_NAT", "BROTLI", "M2M", "Prediction"
         );
         println!("{}", "-".repeat(80));
 
@@ -812,17 +795,18 @@ mod tests {
                 p.none * 100.0,
                 p.token_native * 100.0,
                 p.brotli * 100.0,
-                p.zlib * 100.0,
+                p.m2m * 100.0,
                 decision.algorithm,
                 decision.confidence * 100.0
             );
         }
 
         println!("\n\nSECURITY PREDICTIONS:\n");
-        println!(
-            "{:<25} {:>8} {:>8} | {:<6} | {}",
-            "Case", "SAFE", "UNSAFE", "Pred", "Expected"
+        let header = format!(
+            "{:<25} {:>8} {:>8} | {:<6} | Expect",
+            "Case", "SAFE", "UNSAFE", "Pred"
         );
+        println!("{header}");
         println!("{}", "-".repeat(75));
 
         let mut correct = 0;

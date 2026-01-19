@@ -1,5 +1,7 @@
 //! M3 Protocol: Schema-aware token compression for M2M communication.
 //!
+//! **DEPRECATED**: Use M2M codec instead. M3 does NOT provide 100% JSON fidelity.
+//!
 //! M3 eliminates JSON structural overhead by using positional encoding
 //! with a known schema. Both M2M endpoints understand the schema, so
 //! structure doesn't need to be transmitted.
@@ -41,7 +43,6 @@
 
 use std::io::{Cursor, Read};
 
-use super::{Algorithm, CompressionResult};
 use crate::error::{M2MError, Result};
 
 /// M3 wire format prefix
@@ -494,19 +495,17 @@ impl M3Codec {
     }
 
     /// Compress JSON to M3 wire format
-    pub fn compress(&self, json: &str) -> Result<CompressionResult> {
+    ///
+    /// **DEPRECATED**: Use M2M codec instead.
+    #[deprecated(note = "Use M2M codec instead")]
+    pub fn compress(&self, json: &str) -> Result<(String, usize, usize)> {
         let req = self.from_json(json)?;
         let encoded = self.encode_request(&req)?;
 
         // For wire format, we use base64 for the binary payload after prefix
         let wire = format!("{}", String::from_utf8_lossy(&encoded));
 
-        Ok(CompressionResult::new(
-            wire,
-            Algorithm::M3,
-            json.len(),
-            encoded.len(),
-        ))
+        Ok((wire, json.len(), encoded.len()))
     }
 
     /// Decompress M3 wire format to JSON
@@ -627,23 +626,24 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_compression_savings() {
         let codec = M3Codec::new();
 
         let json = r#"{"model":"gpt-4o","messages":[{"role":"system","content":"You are a helpful assistant."},{"role":"user","content":"What is 2+2?"}],"temperature":0.7}"#;
 
-        let result = codec.compress(json).unwrap();
+        let (_, original_bytes, compressed_bytes) = codec.compress(json).unwrap();
 
         println!("Original JSON: {} bytes", json.len());
-        println!("M3 encoded: {} bytes", result.compressed_bytes);
+        println!("M3 encoded: {} bytes", compressed_bytes);
         println!(
             "Savings: {:.1}%",
-            (1.0 - result.compressed_bytes as f64 / result.original_bytes as f64) * 100.0
+            (1.0 - compressed_bytes as f64 / original_bytes as f64) * 100.0
         );
 
         // M3 should be significantly smaller than JSON
         assert!(
-            result.compressed_bytes < result.original_bytes,
+            compressed_bytes < original_bytes,
             "M3 should compress the data"
         );
     }

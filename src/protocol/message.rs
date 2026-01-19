@@ -296,17 +296,12 @@ mod tests {
     }
 
     #[test]
-    #[allow(deprecated)]
     fn test_data_message() {
-        let msg = Message::data(
-            "session-123",
-            Algorithm::Token,
-            "#T1|{\"m\":[]}".to_string(),
-        );
+        let msg = Message::data("session-123", Algorithm::M2M, "#M2M|1|...".to_string());
 
         assert_eq!(msg.msg_type, MessageType::Data);
         let data = msg.get_data().unwrap();
-        assert_eq!(data.algorithm, Algorithm::Token);
+        assert_eq!(data.algorithm, Algorithm::M2M);
     }
 
     #[test]

@@ -5,7 +5,7 @@
 //!
 //! ## Features
 //!
-//! - **Multi-codec compression**: Token (30% savings), Brotli (high-ratio), Dictionary
+//! - **Multi-codec compression**: M2M (60-70% savings), TokenNative (30-35%), Brotli (high-ratio)
 //! - **Protocol negotiation**: HELLO/ACCEPT handshake for capability exchange
 //! - **ML-based routing**: Hydra model for intelligent algorithm selection
 //! - **Security scanning**: Threat detection for prompt injection/jailbreaks
@@ -50,12 +50,13 @@
 //!
 //! Each compression algorithm has a distinct wire format prefix:
 //!
-//! | Algorithm  | Wire Format                    | Use Case                    |
-//! |------------|--------------------------------|-----------------------------|
-//! | Token      | `#T1\|{abbreviated_json}`      | LLM API payloads (~30% off) |
-//! | Brotli     | `#M2M[v3.0]\|DATA:<base64>`    | Large repetitive content    |
-//! | Dictionary | `#M2M\|<pattern_encoded>`      | JSON with common patterns   |
-//! | None       | (passthrough)                  | Small content (<100 bytes)  |
+//! | Algorithm    | Wire Format                    | Use Case                    |
+//! |--------------|--------------------------------|-----------------------------|
+//! | M2M          | `#M2M\|1\|<header><payload>`   | LLM API payloads (~60-70%)  |
+//! | TokenNative  | `#TK\|C\|<base64_tokens>`      | Token ID transmission       |
+//! | Brotli       | `#M2M[v3.0]\|DATA:<base64>`    | Large repetitive content    |
+//! | Hybrid       | `#HY\|<binary>`                | Streaming mode              |
+//! | None         | (passthrough)                  | Small content (<100 bytes)  |
 //!
 //! ### Message Types
 //!
@@ -80,7 +81,7 @@
 //!
 //! // Compress LLM API payload
 //! let content = r#"{"model":"gpt-4o","messages":[{"role":"user","content":"Hello"}]}"#;
-//! let result = engine.compress(content, Algorithm::Token).unwrap();
+//! let result = engine.compress(content, Algorithm::M2M).unwrap();
 //!
 //! println!("Compressed: {}", result.data);
 //! println!("Ratio: {:.1}%", result.byte_ratio() * 100.0);
@@ -157,16 +158,17 @@
 //!
 //! Typical compression ratios for LLM API payloads:
 //!
-//! | Content Type        | Token   | Brotli  | Dictionary |
-//! |---------------------|---------|---------|------------|
-//! | Chat completion     | ~30%    | ~20%    | ~25%       |
-//! | Long conversation   | ~35%    | ~40%    | ~30%       |
-//! | Tool calls          | ~40%    | ~15%    | ~35%       |
+//! | Content Type        | M2M     | TokenNative | Brotli  |
+//! |---------------------|---------|-------------|---------|
+//! | Chat completion     | ~60%    | ~30%        | ~20%    |
+//! | Long conversation   | ~65%    | ~35%        | ~40%    |
+//! | Tool calls          | ~70%    | ~40%        | ~15%    |
 //!
 //! Algorithm selection heuristics:
-//! - **Token**: Best for standard LLM API JSON (messages, roles, models)
+//! - **M2M**: Best for standard LLM API JSON (default, 100% fidelity)
+//! - **TokenNative**: Best for token-optimized transmission
 //! - **Brotli**: Best for large repetitive content (>1KB with patterns)
-//! - **Dictionary**: Best for JSON with common structural patterns
+//! - **Hybrid**: Best for streaming use cases
 //! - **None**: Content under 100 bytes (overhead exceeds savings)
 
 pub mod codec;

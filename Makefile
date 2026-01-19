@@ -29,21 +29,21 @@ setup: build model-download
 # Build Targets
 # =============================================================================
 
-## Build release binary
+## Build release binary (with crypto support)
 build:
-	cargo build --release
-
-## Build with ONNX support for Hydra model
-build-onnx:
-	cargo build --release --features onnx
+	cargo build --release --features crypto
 
 ## Build debug binary
 build-debug:
-	cargo build
+	cargo build --features crypto
+
+## Build without crypto feature
+build-minimal:
+	cargo build --release
 
 ## Install binary to ~/.cargo/bin
 install:
-	cargo install --path .
+	cargo install --path . --features crypto
 
 # =============================================================================
 # Quality Checks
@@ -89,30 +89,50 @@ lint-fix:
 # Testing
 # =============================================================================
 
-## Run tests
+## Run tests (with crypto)
 test:
-	cargo test
+	cargo test --features crypto
 
 ## Run all tests including ignored (integration tests)
 test-all:
-	cargo test -- --include-ignored
+	cargo test --features crypto -- --include-ignored
 
 ## Run tests with output
 test-verbose:
-	cargo test -- --nocapture
+	cargo test --features crypto -- --nocapture
 
 ## Run specific test
 test-one:
 	@read -p "Test name: " name; \
-	cargo test $$name -- --nocapture
+	cargo test --features crypto $$name -- --nocapture
 
 ## Run benchmarks
 bench:
 	cargo bench
 
+## Run algorithm benchmarks
+bench-algorithms:
+	cargo run --release --bin benchmark --features crypto
+
+## Run token benchmarks
+bench-tokens:
+	cargo run --release --bin token_benchmark --features crypto
+
+## Run TokenNative benchmarks
+bench-token-native:
+	cargo run --release --bin token_native_benchmark --features crypto
+
+## Run stress test (quick mode)
+stress-test:
+	cargo run --release --bin m2m_stress_test --features crypto -- --quick
+
+## Run stress test (full mode)
+stress-test-full:
+	cargo run --release --bin m2m_stress_test --features crypto
+
 ## Run tests with coverage (requires cargo-tarpaulin)
 coverage:
-	cargo tarpaulin --out Html --output-dir target/coverage
+	cargo tarpaulin --features crypto --out Html --output-dir target/coverage
 	@echo "Coverage report: target/coverage/tarpaulin-report.html"
 
 # =============================================================================
@@ -264,8 +284,8 @@ help:
 	@echo "  make setup        - Build + download Hydra model (recommended)"
 	@echo ""
 	@echo "Build:"
-	@echo "  make build        - Build release binary"
-	@echo "  make build-onnx   - Build with ONNX support (optional)"
+	@echo "  make build        - Build release binary (with crypto)"
+	@echo "  make build-minimal- Build without crypto feature"
 	@echo "  make install      - Install to ~/.cargo/bin"
 	@echo ""
 	@echo "Quality:"
@@ -279,6 +299,13 @@ help:
 	@echo "  make test         - Run tests"
 	@echo "  make test-all     - Run all tests (including integration)"
 	@echo "  make coverage     - Generate coverage report"
+	@echo ""
+	@echo "Benchmarks:"
+	@echo "  make bench-algorithms  - Run compression algorithm benchmarks"
+	@echo "  make bench-tokens      - Run token benchmarks"
+	@echo "  make bench-token-native- Run TokenNative benchmarks"
+	@echo "  make stress-test       - Run stress test (quick mode)"
+	@echo "  make stress-test-full  - Run stress test (full mode)"
 	@echo ""
 	@echo "Documentation:"
 	@echo "  make doc          - Build documentation"

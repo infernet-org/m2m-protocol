@@ -252,8 +252,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let payloads = create_test_payloads();
     let algorithms = [
         Algorithm::None,
-        Algorithm::Token,
-        Algorithm::Dictionary,
+        Algorithm::M2M,
+        Algorithm::TokenNative,
         Algorithm::Brotli,
     ];
 
@@ -267,7 +267,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!(
         "{:<20} {:>10} {:>10} {:>10} {:>10} {:>10}",
-        "Payload", "Original", "Token", "Dict", "Brotli", "Best"
+        "Payload", "Original", "M2M", "TkNative", "Brotli", "Best"
     );
     println!("{}", "-".repeat(70));
 
@@ -302,14 +302,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map(|(a, _, _)| *a)
             .unwrap_or(Algorithm::None);
 
-        let token_ratio = results
+        let m2m_ratio = results
             .iter()
-            .find(|(a, _, _)| *a == Algorithm::Token)
+            .find(|(a, _, _)| *a == Algorithm::M2M)
             .map(|(_, _, r)| *r)
             .unwrap_or(100.0);
-        let dict_ratio = results
+        let tk_native_ratio = results
             .iter()
-            .find(|(a, _, _)| *a == Algorithm::Dictionary)
+            .find(|(a, _, _)| *a == Algorithm::TokenNative)
             .map(|(_, _, r)| *r)
             .unwrap_or(100.0);
         let brotli_ratio = results
@@ -320,7 +320,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         println!(
             "{:<20} {:>10} {:>9.1}% {:>9.1}% {:>9.1}% {:>10?}",
-            test.name, original_size, token_ratio, dict_ratio, brotli_ratio, best
+            test.name, original_size, m2m_ratio, tk_native_ratio, brotli_ratio, best
         );
     }
 
@@ -350,13 +350,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     for test in &payloads {
         let json_str = serde_json::to_string(&test.payload)?;
 
-        for algo in &[Algorithm::Token, Algorithm::Dictionary, Algorithm::Brotli] {
+        for algo in &[Algorithm::M2M, Algorithm::TokenNative, Algorithm::Brotli] {
             let compress_result = engine.compress(&json_str, *algo);
             let passed = match compress_result {
                 Ok(compressed) => match engine.decompress(&compressed.data) {
                     Ok(decompressed) => {
-                        // For Token compression, we need to compare JSON values
-                        // because it restores defaults and may reorder keys
+                        // M2M has 100% fidelity so we can compare directly
                         let orig: Value = serde_json::from_str(&json_str)?;
                         let decomp: Value = serde_json::from_str(&decompressed)?;
 
@@ -393,22 +392,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let test_content = r#"{"model":"gpt-4o","messages":[{"role":"user","content":"Hello"}]}"#;
 
-    // Token format
-    let token_result = engine.compress(test_content, Algorithm::Token)?;
-    let token_ok = token_result.data.starts_with("#T1|");
+    // M2M format
+    let m2m_result = engine.compress(test_content, Algorithm::M2M)?;
+    let m2m_ok = m2m_result.data.starts_with("#M2M|1|");
     println!(
-        "Token format (#T1|): {} - {}",
-        if token_ok { "PASS" } else { "FAIL" },
-        &token_result.data[..50.min(token_result.data.len())]
+        "M2M format (#M2M|1|): {} - {}",
+        if m2m_ok { "PASS" } else { "FAIL" },
+        &m2m_result.data[..50.min(m2m_result.data.len())]
     );
 
-    // Dictionary format
-    let dict_result = engine.compress(test_content, Algorithm::Dictionary)?;
-    let dict_ok = dict_result.data.starts_with("#M2M|");
+    // TokenNative format
+    let tk_native_result = engine.compress(test_content, Algorithm::TokenNative)?;
+    let tk_native_ok = tk_native_result.data.starts_with("#TK|");
     println!(
-        "Dictionary format (#M2M|): {} - {}",
-        if dict_ok { "PASS" } else { "FAIL" },
-        &dict_result.data[..50.min(dict_result.data.len())]
+        "TokenNative format (#TK|): {} - {}",
+        if tk_native_ok { "PASS" } else { "FAIL" },
+        &tk_native_result.data[..50.min(tk_native_result.data.len())]
     );
 
     // Brotli format
@@ -423,10 +422,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Algorithm detection
     println!("\nAlgorithm Detection:");
-    println!("  Token: {:?}", m2m::detect_algorithm(&token_result.data));
+    println!("  M2M: {:?}", m2m::detect_algorithm(&m2m_result.data));
     println!(
-        "  Dictionary: {:?}",
-        m2m::detect_algorithm(&dict_result.data)
+        "  TokenNative: {:?}",
+        m2m::detect_algorithm(&tk_native_result.data)
     );
     println!("  Brotli: {:?}", m2m::detect_algorithm(&brotli_result.data));
 
@@ -538,7 +537,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Request payload: {} bytes", original_size);
 
     // Compress with each algorithm
-    for algo in &[Algorithm::Token, Algorithm::Dictionary, Algorithm::Brotli] {
+    for algo in &[Algorithm::M2M, Algorithm::TokenNative, Algorithm::Brotli] {
         let compressed = engine.compress(&request_json, *algo)?;
         let ratio = (compressed.compressed_bytes as f64 / original_size as f64) * 100.0;
         println!(
@@ -572,7 +571,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             // Compress response
             let response_json = serde_json::to_string(&response)?;
-            let compressed_response = engine.compress(&response_json, Algorithm::Token)?;
+            let compressed_response = engine.compress(&response_json, Algorithm::M2M)?;
             let response_ratio =
                 (compressed_response.compressed_bytes as f64 / response_json.len() as f64) * 100.0;
             println!(
@@ -747,7 +746,7 @@ Provide your safety assessment for User in the above conversation:
         };
 
         let request_json = serde_json::to_string(&request)?;
-        let compressed = engine.compress(&request_json, Algorithm::Token)?;
+        let compressed = engine.compress(&request_json, Algorithm::M2M)?;
 
         total_original_bytes += request_json.len();
         total_compressed_bytes += compressed.compressed_bytes;
@@ -803,23 +802,28 @@ Provide your safety assessment for User in the above conversation:
 
     println!("COMPRESSION CLAIMS VALIDATION:\n");
 
-    // Calculate overall Token compression ratio
-    let (token_orig, token_comp) = algo_totals.get(&Algorithm::Token).unwrap();
-    let token_ratio = (*token_comp as f64 / *token_orig as f64) * 100.0;
-    let token_savings = 100.0 - token_ratio;
+    // Calculate overall M2M compression ratio
+    let (m2m_orig, m2m_comp) = algo_totals.get(&Algorithm::M2M).unwrap();
+    let m2m_ratio = (*m2m_comp as f64 / *m2m_orig as f64) * 100.0;
+    let m2m_savings = 100.0 - m2m_ratio;
 
-    println!("  Token Codec: {:.1}% savings (Claim: ~30%)", token_savings);
-    let token_claim = if token_savings >= 25.0 {
-        "VERIFIED"
+    println!(
+        "  M2M Codec: {:.1}% savings (100% JSON fidelity)",
+        m2m_savings
+    );
+    let m2m_claim = if m2m_savings >= 30.0 {
+        "EXCELLENT"
+    } else if m2m_savings >= 20.0 {
+        "GOOD"
     } else {
-        "BELOW TARGET"
+        "MODERATE"
     };
-    println!("    Status: {}\n", token_claim);
+    println!("    Status: {}\n", m2m_claim);
 
-    let (dict_orig, dict_comp) = algo_totals.get(&Algorithm::Dictionary).unwrap();
-    let dict_ratio = (*dict_comp as f64 / *dict_orig as f64) * 100.0;
-    let dict_savings = 100.0 - dict_ratio;
-    println!("  Dictionary Codec: {:.1}% savings", dict_savings);
+    let (tk_native_orig, tk_native_comp) = algo_totals.get(&Algorithm::TokenNative).unwrap();
+    let tk_native_ratio = (*tk_native_comp as f64 / *tk_native_orig as f64) * 100.0;
+    let tk_native_savings = 100.0 - tk_native_ratio;
+    println!("  TokenNative Codec: {:.1}% savings", tk_native_savings);
 
     let (brotli_orig, brotli_comp) = algo_totals.get(&Algorithm::Brotli).unwrap();
     let brotli_ratio = (*brotli_comp as f64 / *brotli_orig as f64) * 100.0;

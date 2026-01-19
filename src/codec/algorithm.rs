@@ -3,20 +3,24 @@
 use serde::{Deserialize, Serialize};
 
 /// Available compression algorithms
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+///
+/// M2M Protocol v0.4.0 supports three compression algorithms:
+/// - **M2M**: Default, 100% JSON fidelity with extracted routing headers
+/// - **TokenNative**: Token ID transmission for maximum compression  
+/// - **Brotli**: High-ratio compression for large content (>1KB)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
-#[derive(Default)]
 pub enum Algorithm {
     /// No compression (passthrough)
     None,
-    /// Token-optimized compression (DEPRECATED - only 3% token savings)
+    /// M2M Wire Format v1 (default, 100% JSON fidelity)
     ///
-    /// Uses key/value abbreviation. Superseded by M3 schema-aware compression.
-    #[deprecated(
-        since = "3.0.0",
-        note = "Use M3 instead. Token compression only achieves 3% token savings."
-    )]
-    Token,
+    /// Binary protocol with header extraction for routing and Brotli-compressed
+    /// JSON payload. Provides 100% fidelity reconstruction of original JSON.
+    ///
+    /// Wire format: `#M2M|1|<fixed_header><routing_header><payload>`
+    #[default]
+    M2M,
     /// Token-native compression (transmit token IDs directly)
     ///
     /// This algorithm tokenizes content using the negotiated tokenizer and
@@ -25,109 +29,55 @@ pub enum Algorithm {
     ///
     /// Wire format: `#TK|<tokenizer_id>|<varint_encoded_tokens>`
     TokenNative,
-    /// M3: Schema-aware binary compression (M2M v3.0)
-    ///
-    /// Eliminates JSON structural overhead by using positional encoding
-    /// with a known schema. Achieves ~60% byte savings.
-    ///
-    /// Wire format: `#M3|<schema><binary_payload>`
-    #[default]
-    M3,
     /// Brotli compression (high ratio, base64 encoded)
-    Brotli,
-    /// Zlib/deflate compression (DEPRECATED in v3.0)
     ///
-    /// This algorithm is kept for backwards compatibility with v2.0 wire format.
-    /// New implementations MUST NOT use Zlib for compression.
-    /// Decompression attempts will fall back to Brotli.
-    #[deprecated(
-        since = "3.0.0",
-        note = "Use M3 or Brotli instead. Kept for v2.0 wire format compatibility."
-    )]
-    Zlib,
-    /// Dictionary-based encoding (DEPRECATED - negative compression)
-    #[deprecated(
-        since = "3.0.0",
-        note = "Use M3 instead. Dictionary has negative compression."
-    )]
-    Dictionary,
+    /// Best for large content (>1KB) with repetitive patterns.
+    /// Achieves 60-80% compression.
+    ///
+    /// Wire format: `#M2M[v3.0]|DATA:<base64_brotli>`
+    Brotli,
 }
 
 impl Algorithm {
     /// Get the wire format prefix for this algorithm
-    #[allow(deprecated)]
     pub fn prefix(&self) -> &'static str {
         match self {
             Algorithm::None => "",
-            Algorithm::Token => "#T1|",
+            Algorithm::M2M => "#M2M|1|",
             Algorithm::TokenNative => "#TK|",
-            Algorithm::M3 => "#M3|",
             Algorithm::Brotli => "#M2M[v3.0]|DATA:",
-            Algorithm::Zlib => "#M2M[v2.0]|DATA:",
-            Algorithm::Dictionary => "#M2M|",
         }
     }
 
     /// Parse algorithm from wire format
-    ///
-    /// Note: v2.0 format (Zlib) is detected for backwards compatibility
-    /// but decompression will fall back to Brotli.
-    #[allow(deprecated)]
     pub fn from_prefix(content: &str) -> Option<Self> {
-        if content.starts_with("#M3|") {
-            Some(Algorithm::M3)
+        if content.starts_with("#M2M|1|") {
+            Some(Algorithm::M2M)
         } else if content.starts_with("#TK|") {
             Some(Algorithm::TokenNative)
-        } else if content.starts_with("#T1|") {
-            Some(Algorithm::Token)
         } else if content.starts_with("#M2M[v3.0]|") {
             Some(Algorithm::Brotli)
-        } else if content.starts_with("#M2M[v2.0]|") {
-            Some(Algorithm::Zlib)
-        } else if content.starts_with("#M2M|") {
-            Some(Algorithm::Dictionary)
         } else {
             None
         }
     }
 
     /// Get human-readable name
-    #[allow(deprecated)]
     pub fn name(&self) -> &'static str {
         match self {
             Algorithm::None => "NONE",
-            Algorithm::Token => "TOKEN (DEPRECATED)",
+            Algorithm::M2M => "M2M",
             Algorithm::TokenNative => "TOKEN_NATIVE",
-            Algorithm::M3 => "M3",
             Algorithm::Brotli => "BROTLI",
-            Algorithm::Zlib => "ZLIB (DEPRECATED)",
-            Algorithm::Dictionary => "DICTIONARY (DEPRECATED)",
         }
     }
 
     /// Get all available algorithms in preference order
-    ///
-    /// Note: Deprecated algorithms are excluded.
-    /// Use [`Algorithm::all_including_deprecated`] if you need to include them.
     pub fn all() -> &'static [Algorithm] {
         &[
-            Algorithm::M3,
+            Algorithm::M2M,
             Algorithm::TokenNative,
             Algorithm::Brotli,
-            Algorithm::None,
-        ]
-    }
-
-    /// Get all algorithms including deprecated ones
-    #[allow(deprecated)]
-    pub fn all_including_deprecated() -> &'static [Algorithm] {
-        &[
-            Algorithm::M3,
-            Algorithm::TokenNative,
-            Algorithm::Token,
-            Algorithm::Brotli,
-            Algorithm::Zlib,
-            Algorithm::Dictionary,
             Algorithm::None,
         ]
     }
