@@ -8,6 +8,7 @@ use serde_json::Value;
 
 use super::brotli::BrotliCodec;
 use super::dictionary::DictionaryCodec;
+use super::m3::M3Codec;
 use super::token::TokenCodec;
 use super::token_native::TokenNativeCodec;
 use super::{Algorithm, CompressionResult};
@@ -99,9 +100,12 @@ pub struct CodecEngine {
     token: TokenCodec,
     /// Token-native codec instance
     token_native: TokenNativeCodec,
+    /// M3 codec instance (default for M2M v3)
+    m3: M3Codec,
     /// Brotli codec instance
     brotli: BrotliCodec,
-    /// Dictionary codec instance
+    /// Dictionary codec instance (deprecated)
+    #[allow(deprecated)]
     dictionary: DictionaryCodec,
     /// Hydra model for ML routing (optional)
     hydra: Option<HydraModel>,
@@ -109,21 +113,23 @@ pub struct CodecEngine {
     pub ml_routing: bool,
     /// Minimum size for Brotli (bytes)
     pub brotli_threshold: usize,
-    /// Prefer token compression for LLM API payloads
-    pub prefer_token_for_api: bool,
+    /// Prefer M3 for LLM API payloads (default: true)
+    pub prefer_m3_for_api: bool,
 }
 
 impl Default for CodecEngine {
+    #[allow(deprecated)]
     fn default() -> Self {
         Self {
             token: TokenCodec::new(),
             token_native: TokenNativeCodec::default(),
+            m3: M3Codec::new(),
             brotli: BrotliCodec::new(),
             dictionary: DictionaryCodec::new(),
             hydra: None,
             ml_routing: false,
             brotli_threshold: 1024, // 1KB
-            prefer_token_for_api: true,
+            prefer_m3_for_api: true,
         }
     }
 }
@@ -304,6 +310,7 @@ impl CodecEngine {
                 content.len(),
                 content.len(),
             )),
+            Algorithm::M3 => self.m3.compress(content),
             Algorithm::Token => {
                 let value: Value = serde_json::from_str(content)?;
                 self.token.compress(&value)
@@ -314,7 +321,7 @@ impl CodecEngine {
             Algorithm::Zlib => {
                 // Zlib is deprecated in v3.0 - return error to make it explicit
                 Err(M2MError::InvalidCodec(
-                    "Zlib algorithm is deprecated in M2M v3.0. Use Brotli instead.".to_string(),
+                    "Zlib algorithm is deprecated in M2M v3.0. Use M3 instead.".to_string(),
                 ))
             },
         }
@@ -382,9 +389,9 @@ impl CodecEngine {
     /// Heuristic-based algorithm selection
     ///
     /// Epistemic basis:
-    /// - K: TokenNative achieves ~50% raw byte compression
+    /// - K: M3 achieves ~60% byte savings for LLM API JSON
     /// - K: Brotli is optimal for large repetitive content (>1KB)
-    /// - B: TokenNative is best for small-medium LLM API JSON (<1KB)
+    /// - B: M3 is best for small-medium LLM API JSON (<1KB)
     fn heuristic_select_algorithm(&self, analysis: &ContentAnalysis) -> Algorithm {
         // Small content: no compression (overhead not worth it)
         // Epistemic: K - compression overhead exceeds savings
@@ -398,10 +405,10 @@ impl CodecEngine {
             return Algorithm::Brotli;
         }
 
-        // Medium LLM API JSON (100-1KB): TokenNative compression
-        // Epistemic: K - TokenNative achieves ~50% compression
-        if analysis.is_llm_api && self.prefer_token_for_api {
-            return Algorithm::TokenNative;
+        // Medium LLM API JSON (100-1KB): M3 compression (schema-aware)
+        // Epistemic: K - M3 achieves ~60% compression
+        if analysis.is_llm_api && self.prefer_m3_for_api {
+            return Algorithm::M3;
         }
 
         // Medium content with high repetition: Brotli
@@ -409,9 +416,9 @@ impl CodecEngine {
             return Algorithm::Brotli;
         }
 
-        // Default: TokenNative for JSON (M2M optimal), None for others
+        // Default: M3 for JSON (M2M optimal), None for others
         if analysis.is_json {
-            Algorithm::TokenNative
+            Algorithm::M3
         } else {
             Algorithm::None
         }
@@ -424,6 +431,7 @@ impl CodecEngine {
 
         match algorithm {
             Algorithm::None => Ok(wire.to_string()),
+            Algorithm::M3 => self.m3.decompress(wire),
             Algorithm::Token => {
                 let value = self.token.decompress(wire)?;
                 serde_json::to_string(&value).map_err(|e| M2MError::Decompression(e.to_string()))
@@ -450,12 +458,12 @@ impl CodecEngine {
     pub fn compress_best(&self, content: &str) -> Result<CompressionResult> {
         let mut best: Option<CompressionResult> = None;
 
-        // Try each algorithm (TokenNative first as likely best for M2M)
+        // Try each algorithm (M3 first as best for schema-aware compression)
         for algo in [
+            Algorithm::M3,
             Algorithm::TokenNative,
             Algorithm::Token,
             Algorithm::Brotli,
-            Algorithm::Dictionary,
         ] {
             if let Ok(result) = self.compress(content, algo) {
                 let is_better = match &best {
@@ -492,14 +500,14 @@ mod tests {
     #[test]
     fn test_auto_select_llm_api() {
         let engine = CodecEngine::new();
-        // Content must be 100-1024 bytes for TokenNative selection
+        // Content must be 100-1024 bytes for M3 selection
         let content = r#"{"model":"gpt-4o","messages":[{"role":"user","content":"Hello, how are you doing today? This is a longer message to test the compression algorithm selection."}]}"#;
         let analysis = ContentAnalysis::analyze(content);
 
         assert!(analysis.is_json);
         assert!(analysis.is_llm_api);
         assert!(analysis.length >= 100 && analysis.length <= 1024);
-        assert_eq!(engine.select_algorithm(&analysis), Algorithm::TokenNative);
+        assert_eq!(engine.select_algorithm(&analysis), Algorithm::M3);
     }
 
     #[test]

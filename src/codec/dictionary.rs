@@ -2,6 +2,10 @@
 //!
 //! Uses lookup tables for common JSON patterns in LLM API requests/responses.
 //! Optimized for structured, repetitive content.
+//!
+//! **DEPRECATED**: Use M3 instead. Dictionary has negative compression.
+
+#![allow(deprecated)] // Self-referential deprecation
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use serde_json::Value;

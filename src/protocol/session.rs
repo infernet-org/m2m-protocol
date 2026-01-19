@@ -572,9 +572,9 @@ mod tests {
         let accept = server.process_hello(&hello).unwrap();
         client.process_accept(&accept).unwrap();
 
-        // TokenNative should be the default negotiated algorithm
-        assert_eq!(client.algorithm(), Some(Algorithm::TokenNative));
-        assert_eq!(server.algorithm(), Some(Algorithm::TokenNative));
+        // M3 should be the default negotiated algorithm
+        assert_eq!(client.algorithm(), Some(Algorithm::M3));
+        assert_eq!(server.algorithm(), Some(Algorithm::M3));
 
         // Encoding should be cl100k (default)
         assert_eq!(client.encoding(), Some(Encoding::Cl100kBase));

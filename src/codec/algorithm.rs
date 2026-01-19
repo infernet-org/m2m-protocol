@@ -10,7 +10,6 @@ pub enum Algorithm {
     /// No compression (passthrough)
     None,
     /// Token-optimized compression (key/value abbreviation)
-    #[default]
     Token,
     /// Token-native compression (transmit token IDs directly)
     ///
@@ -20,6 +19,14 @@ pub enum Algorithm {
     ///
     /// Wire format: `#TK|<tokenizer_id>|<varint_encoded_tokens>`
     TokenNative,
+    /// M3: Schema-aware binary compression (M2M v3.0)
+    ///
+    /// Eliminates JSON structural overhead by using positional encoding
+    /// with a known schema. Achieves ~60% byte savings.
+    ///
+    /// Wire format: `#M3|<schema><binary_payload>`
+    #[default]
+    M3,
     /// Brotli compression (high ratio, base64 encoded)
     Brotli,
     /// Zlib/deflate compression (DEPRECATED in v3.0)
@@ -29,10 +36,14 @@ pub enum Algorithm {
     /// Decompression attempts will fall back to Brotli.
     #[deprecated(
         since = "3.0.0",
-        note = "Use Brotli instead. Kept for v2.0 wire format compatibility."
+        note = "Use M3 or Brotli instead. Kept for v2.0 wire format compatibility."
     )]
     Zlib,
-    /// Dictionary-based encoding
+    /// Dictionary-based encoding (DEPRECATED - negative compression)
+    #[deprecated(
+        since = "3.0.0",
+        note = "Use M3 instead. Dictionary has negative compression."
+    )]
     Dictionary,
 }
 
@@ -44,6 +55,7 @@ impl Algorithm {
             Algorithm::None => "",
             Algorithm::Token => "#T1|",
             Algorithm::TokenNative => "#TK|",
+            Algorithm::M3 => "#M3|",
             Algorithm::Brotli => "#M2M[v3.0]|DATA:",
             Algorithm::Zlib => "#M2M[v2.0]|DATA:",
             Algorithm::Dictionary => "#M2M|",
@@ -56,7 +68,9 @@ impl Algorithm {
     /// but decompression will fall back to Brotli.
     #[allow(deprecated)]
     pub fn from_prefix(content: &str) -> Option<Self> {
-        if content.starts_with("#TK|") {
+        if content.starts_with("#M3|") {
+            Some(Algorithm::M3)
+        } else if content.starts_with("#TK|") {
             Some(Algorithm::TokenNative)
         } else if content.starts_with("#T1|") {
             Some(Algorithm::Token)
@@ -76,24 +90,25 @@ impl Algorithm {
     pub fn name(&self) -> &'static str {
         match self {
             Algorithm::None => "NONE",
-            Algorithm::Token => "TOKEN",
-            Algorithm::TokenNative => "TOKEN_NATIVE",
+            Algorithm::Token => "TOKEN (LEGACY)",
+            Algorithm::TokenNative => "TOKEN_NATIVE (LEGACY)",
+            Algorithm::M3 => "M3",
             Algorithm::Brotli => "BROTLI",
             Algorithm::Zlib => "ZLIB (DEPRECATED)",
-            Algorithm::Dictionary => "DICTIONARY",
+            Algorithm::Dictionary => "DICTIONARY (DEPRECATED)",
         }
     }
 
     /// Get all available algorithms in preference order
     ///
-    /// Note: Zlib is excluded as it is deprecated in v3.0.
-    /// Use [`Algorithm::all_including_deprecated`] if you need to include it.
+    /// Note: Deprecated algorithms are excluded.
+    /// Use [`Algorithm::all_including_deprecated`] if you need to include them.
     pub fn all() -> &'static [Algorithm] {
         &[
+            Algorithm::M3,
             Algorithm::TokenNative,
             Algorithm::Token,
             Algorithm::Brotli,
-            Algorithm::Dictionary,
             Algorithm::None,
         ]
     }
@@ -102,6 +117,7 @@ impl Algorithm {
     #[allow(deprecated)]
     pub fn all_including_deprecated() -> &'static [Algorithm] {
         &[
+            Algorithm::M3,
             Algorithm::TokenNative,
             Algorithm::Token,
             Algorithm::Brotli,

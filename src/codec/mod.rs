@@ -73,6 +73,7 @@ mod algorithm;
 mod brotli;
 mod dictionary;
 mod engine;
+mod m3;
 mod streaming;
 mod tables;
 mod token;
@@ -82,6 +83,7 @@ pub use algorithm::{Algorithm, CompressionResult};
 pub use brotli::BrotliCodec;
 pub use dictionary::DictionaryCodec;
 pub use engine::{CodecEngine, ContentAnalysis};
+pub use m3::{M3ChatRequest, M3Codec, M3Message, M3_PREFIX};
 pub use streaming::{
     SseEvent, StreamingCodec, StreamingDecompressor, StreamingMode, StreamingStats,
 };
@@ -94,13 +96,18 @@ pub use token_native::TokenNativeCodec;
 
 /// Check if content is in M2M compressed format
 pub fn is_m2m_format(content: &str) -> bool {
-    content.starts_with("#M2M") || content.starts_with("#T1|") || content.starts_with("#TK|")
+    content.starts_with("#M3|")
+        || content.starts_with("#M2M")
+        || content.starts_with("#T1|")
+        || content.starts_with("#TK|")
 }
 
 /// Detect the compression algorithm used in a message
 #[allow(deprecated)]
 pub fn detect_algorithm(content: &str) -> Option<Algorithm> {
-    if content.starts_with("#TK|") {
+    if content.starts_with("#M3|") {
+        Some(Algorithm::M3)
+    } else if content.starts_with("#TK|") {
         Some(Algorithm::TokenNative)
     } else if content.starts_with("#T1|") {
         Some(Algorithm::Token)
