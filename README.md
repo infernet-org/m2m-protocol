@@ -36,13 +36,23 @@ When AI agents communicate at scale, they exchange massive amounts of JSON: conv
 
 As multi-agent systems scale, raw JSON becomes a bottleneck:
 
-| Scenario | Daily Messages | Raw JSON | With M2M | Savings |
-|----------|----------------|----------|----------|---------|
-| Small deployment | 100K | 240 GB/mo | 100 GB/mo | **140 GB** |
-| Medium deployment | 10M | 24 TB/mo | 10 TB/mo | **14 TB** |
-| Large deployment | 1B | 2.4 PB/mo | 1 PB/mo | **1.4 PB** |
+| Scale | Messages/Day | Payload | Monthly Traffic | With M2M (58%) | Saved |
+|-------|--------------|---------|-----------------|----------------|-------|
+| Startup | 100K | 2 KB | 180 GB | 76 GB | 104 GB |
+| Growth | 1M | 2 KB | 1.8 TB | 756 GB | 1 TB |
+| Scale | 10M | 2 KB | 18 TB | 7.6 TB | 10 TB |
+| Enterprise | 100M | 2 KB | 180 TB | 76 TB | 104 TB |
 
-*Assuming average 2.4 KB payload with 58% compression*
+**AWS Egress Cost Impact** (Data Transfer Out, US regions):
+
+| Monthly Traffic | Raw Cost | With M2M | Savings/Month |
+|-----------------|----------|----------|---------------|
+| 180 GB | $16 | $7 | $9 |
+| 1.8 TB | $162 | $68 | $94 |
+| 18 TB | $1,494 | $628 | $866 |
+| 180 TB | $10,494 | $4,408 | $6,086 |
+
+*AWS pricing: $0.09/GB (first 10TB), $0.085/GB (next 40TB), $0.07/GB (next 100TB), $0.05/GB (150TB+)*
 
 Every agent-to-agent message carries redundant JSON structure: `{"role":`, `"content":`, `"model":`, etc. M2M eliminates this overhead while keeping payloads routable.
 
