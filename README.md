@@ -24,41 +24,62 @@
 
 M2M is a wire protocol for **agent-to-agent communication** — not agent-to-LLM-API.
 
-When AI agents communicate at scale, they exchange massive amounts of JSON: conversation histories, tool outputs, context windows, and orchestration data. M2M compresses this traffic:
+When AI agents communicate at scale, they exchange massive amounts of JSON: conversation histories, tool outputs, context windows, and orchestration data. M2M compresses this traffic by 40-70% while keeping it routable and secure.
 
-- **Bandwidth**: 40-70% smaller payloads = reduced egress costs
-- **Latency**: Faster transmission between agents/services
-- **Routing**: Extract model/provider without decompression (load balancer friendly)
-- **Security**: Protocol-embedded threat detection (prompt injection, jailbreaks)
-- **Crypto**: Optional HMAC authentication and AEAD encryption
+## Why M2M?
 
-## The Problem
+### 1. Latency-Sensitive Agent Orchestration
 
-As multi-agent systems scale, raw JSON becomes expensive. Cloud egress fees—charged when data leaves a provider's network—add up quickly.
+Multi-agent systems are bottlenecked by coordination overhead. Every millisecond waiting on network I/O is a millisecond not spent on inference.
 
-| Scale | Messages/Day | ~Tokens/Day | Avg Payload | Monthly Egress | With M2M | Saved |
-|-------|--------------|-------------|-------------|----------------|----------|-------|
-| Startup | 100K | 60M | 2 KB | 6 GB | 2.5 GB | 3.5 GB |
-| Growth | 1M | 600M | 2 KB | 60 GB | 25 GB | 35 GB |
-| Scale | 10M | 6B | 2 KB | 600 GB | 252 GB | 348 GB |
-| Enterprise | 100M | 60B | 2 KB | 6 TB | 2.5 TB | 3.5 TB |
+- **58% smaller payloads** = faster transmission between agents
+- **Sub-millisecond encode/decode** = negligible overhead
+- **Streaming support** = process chunks as they arrive
 
-*Assumes ~600 tokens per 2KB message (typical multi-turn LLM API payload). M2M compression: 58%.*
+### 2. Payload Limit Constraints
 
-**Cloud Egress Cost Impact** (2025 rates, after free tier):
+Cloud infrastructure imposes hard limits on payload sizes:
 
-| Provider | Free Tier | Rate | 600 GB Raw | 252 GB (M2M) | Savings |
-|----------|-----------|------|------------|--------------|---------|
-| AWS | 100 GB/mo | $0.05-0.09/GB | ~$45 | ~$14 | ~$31 |
-| Azure | 100 GB/mo | $0.087/GB | ~$44 | ~$13 | ~$31 |
-| GCP | varies | $0.08-0.12/GB | ~$50 | ~$15 | ~$35 |
-| Oracle | 10 TB/mo | $0.0085/GB | ~$0* | ~$0* | — |
+| Service | Limit |
+|---------|-------|
+| AWS API Gateway | 10 MB |
+| AWS Lambda (sync) | 6 MB |
+| AWS Lambda (async) | 256 KB |
+| CloudFlare Workers | 100 MB |
 
-*Oracle's 10TB free tier covers most deployments at this scale.*
+M2M compression lets you fit **2-3x more context** within these limits—critical for agents passing large conversation histories or tool outputs.
 
-> **Note**: Egress is billed on bytes transferred. Compression directly reduces the bill. This compounds with CDNs, regional locality, and private links.
+### 3. Storage & Logging
 
-Every agent-to-agent message carries redundant JSON structure: `{"role":`, `"content":`, `"model":`, etc. M2M eliminates this overhead while keeping payloads routable.
+Conversation logs, audit trails, and replay buffers add up:
+
+- **40-70% smaller logs** = less storage cost
+- **Compressed indexes** = faster search
+- **Cheaper retention** = keep logs longer
+
+### 4. Routing Without Decompression
+
+M2M's wire format exposes routing headers (model, provider, token count) **without decompressing the payload**:
+
+```
+#M2M|1|<header><payload>
+       ↑
+       Model, provider, token count readable here
+       Load balancer routes without parsing JSON
+```
+
+This enables smart traffic shaping, model-based routing, and cost attribution at the infrastructure layer.
+
+### 5. Protocol-Embedded Security
+
+Threat detection happens **before** transmission to downstream agents:
+
+- Prompt injection detection
+- Jailbreak pattern matching
+- Data exfiltration prevention
+- Malformed payload rejection
+
+Security at the protocol layer, not bolted on top.
 
 ## Quick Start
 
