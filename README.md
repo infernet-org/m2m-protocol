@@ -3,7 +3,7 @@
 [![Crates.io](https://img.shields.io/crates/v/m2m-core.svg)](https://crates.io/crates/m2m-core)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.82+-orange.svg)](https://www.rust-lang.org/)
-[![Tests](https://img.shields.io/badge/tests-220%20passing-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-260%20passing-brightgreen.svg)]()
 
 **Wire protocol for AI agent communication with inspectable headers and semantic security.**
 
@@ -30,7 +30,7 @@ Security Modes (headers always readable):
                   ▲ headers remain readable ▲
 
 Sch: 0x01=Request  0x02=Response  0x03=Stream  0x10=Error
-Sec: 0x00=None     0x01=HMAC-SHA256           0x02=AES-256-GCM
+Sec: 0x00=None     0x01=HMAC-SHA256           0x02=ChaCha20-Poly1305
 ```
 
 Cognitive security (threat detection) operates pre-transmission — see [SecurityScanner](#cognitive-security).
@@ -201,8 +201,9 @@ Optional (`--features crypto`):
 | Feature | Algorithm | Purpose |
 |---------|-----------|---------|
 | HMAC | SHA-256 | Message authentication |
-| AEAD | AES-256-GCM | Authenticated encryption |
+| AEAD | ChaCha20-Poly1305 | Authenticated encryption |
 | Key Exchange | X25519 | Ephemeral key agreement |
+| Key Derivation | HKDF-SHA256 | Hierarchical key derivation |
 
 **Security as a protocol guarantee**: Every M2M-speaking agent gets the same threat detection and crypto primitives. No per-agent implementation. No gaps.
 
@@ -277,7 +278,7 @@ make model-download
 
 ## Project Status
 
-**Version 0.4.0** — 220+ tests passing.
+**Version 0.4.0** — 260+ tests passing.
 
 | Feature | Status |
 |---------|--------|
