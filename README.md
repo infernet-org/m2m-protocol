@@ -34,7 +34,7 @@ When AI agents communicate at scale, they exchange massive amounts of JSON: conv
 
 ## The Problem
 
-As multi-agent systems scale, raw JSON becomes a bottleneck. Cloud egress fees—charged when data leaves a provider's network—add up quickly.
+As multi-agent systems scale, raw JSON becomes expensive. Cloud egress fees—charged when data leaves a provider's network—add up quickly.
 
 | Scale | Messages/Day | Payload | Monthly Traffic | With M2M (58%) | Saved |
 |-------|--------------|---------|-----------------|----------------|-------|
