@@ -8,28 +8,29 @@
 **Wire protocol for AI agent communication with inspectable headers and semantic security.**
 
 ```
-M2M Frame (Security Mode = None)
-┌─────────┬────────────────────────┬────────────────────┬─────────┬───────┬──────────────┐
-│ Prefix  │     Fixed Header       │   Routing Header   │ Payload │ CRC32 │   Payload    │
-│ #M2M|1| │        (20B)           │     (variable)     │ Len 4B  │  4B   │  (compress)  │
-├─────────┼────┬────┬──────┬───────┼────────────────────┼─────────┴───────┴──────────────┤
-│         │Sch │Sec │Flags │Reserv │ Model (len+str)    │                                │
-│         │ 1B │ 1B │  4B  │ 12B   │ MsgCount (varint)  │  Brotli-compressed JSON        │
-│         │    │    │      │       │ Roles (2b packed)  │  (100% fidelity)               │
-│         │    │    │      │       │ ContentHint (var)  │                                │
-│         │    │    │      │       │ MaxTokens (var)    │                                │
-│         │    │    │      │       │ CostEst (f32)      │                                │
-├─────────┴────┴────┴──────┴───────┴────────────────────┼────────────────────────────────┤
-│             ▲ Readable without decompression          │ ▲ Requires decode              │
-└───────────────────────────────────────────────────────┴────────────────────────────────┘
+M2M Frame (Application Layer - transported over HTTP/QUIC)
+┌─────────┬──────────────────────────────┬────────────────────┬─────────┬───────┬─────────────┐
+│ Prefix  │       Fixed Header (20B)     │   Routing Header   │ Payload │ CRC32 │   Payload   │
+│ #M2M|1| │                              │     (variable)     │ Len 4B  │  4B   │ (compress)  │
+├─────────┼───────┬────┬────┬──────┬─────┼────────────────────┼─────────┴───────┴─────────────┤
+│         │HdrLen │Sch │Sec │Flags │Rsrv │ Model (len+str)    │                               │
+│         │  2B   │ 1B │ 1B │  4B  │ 12B │ MsgCount (varint)  │  Brotli-compressed JSON       │
+│         │       │    │    │      │     │ Roles (2b packed)  │  (100% fidelity)              │
+│         │       │    │    │      │     │ ContentHint (var)  │                               │
+│         │       │    │    │      │     │ MaxTokens (var)    │                               │
+│         │       │    │    │      │     │ CostEst (f32)      │                               │
+├─────────┴───────┴────┴────┴──────┴─────┴────────────────────┼───────────────────────────────┤
+│               ▲ Readable without decompression              │ ▲ Requires decode             │
+└─────────────────────────────────────────────────────────────┴───────────────────────────────┘
 
-Security Modes:
+Security Modes (headers always readable):
   None: [headers][payload_len][crc32][payload]
   HMAC: [headers][payload_len][crc32][payload][hmac_tag:32B]
-  AEAD: [headers][nonce:12B][encrypted_payload + auth_tag:16B]
+  AEAD: [headers][nonce:12B][encrypt(payload_len+crc32+payload)+tag:16B]
+                  ▲ headers remain readable ▲
 
-Schema: 0x01=Request 0x02=Response 0x03=Stream 0x10=Error
-Sec:    0x00=None   0x01=HMAC-SHA256  0x02=AES-256-GCM
+Sch: 0x01=Request  0x02=Response  0x03=Stream  0x10=Error
+Sec: 0x00=None     0x01=HMAC-SHA256           0x02=AES-256-GCM
 ```
 
 Cognitive security (threat detection) operates pre-transmission — see [SecurityScanner](#cognitive-security).
