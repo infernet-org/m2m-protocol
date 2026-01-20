@@ -8,19 +8,23 @@
 **Wire protocol for AI agent communication with inspectable headers and semantic security.**
 
 ```
-┌───────────────────────────────────────────────────────────────────────────┐
-│                            M2M Frame Structure                            │
-├─────────┬─────────────────────────┬──────────────┬────────────────────────┤
-│ Prefix  │    Fixed Header (20B)   │   Routing    │   Compressed Payload   │
-│ #M2M|1| │                         │   Header     │                        │
-├─────────┼────────┬────────┬───────┼──────────────┼────────────────────────┤
-│         │ Schema │ Sec    │ Flags │ Model        │                        │
-│         │ 1B     │ Mode   │ 4B    │ Msg Count    │  Brotli-compressed     │
-│         │        │ 1B     │       │ Token Est    │  JSON (100% fidelity)  │
-│         │        │        │       │ Cost Est     │                        │
-├─────────┴────────┴────────┴───────┴──────────────┼────────────────────────┤
-│         ▲ Readable without decompression         │ ▲ Requires decode      │
-└──────────────────────────────────────────────────┴────────────────────────┘
+0        7        15                 20B                        Variable
+├────────┼────────┼──────────────────┼────────────────────────────────────────┐
+│ Prefix │ Header │    Fixed Hdr     │ Routing Header     │ Compressed       │
+│#M2M|1| │ Len 2B │                  │ (variable)         │ Payload          │
+├────────┴────────┼────┬────┬────────┼────────────────────┼──────────────────┤
+│                 │Sch │Sec │ Flags  │ Model (len+str)    │                  │
+│                 │ 1B │ 1B │   4B   │ MsgCount (varint)  │ Brotli-encoded   │
+│                 │    │    │        │ Roles (2b packed)  │ JSON             │
+│                 │    │    │Reserved│ ContentHint (var)  │                  │
+│                 │    │    │  12B   │ MaxTokens (var)    │ (100% fidelity)  │
+│                 │    │    │        │ CostEst (f32)      │                  │
+├─────────────────┴────┴────┴────────┴────────────────────┼──────────────────┤
+│              ▲ Readable without decompression           │▲ Decode required │
+└─────────────────────────────────────────────────────────┴──────────────────┘
+
+Schema: 0x01=Request 0x02=Response 0x03=Stream 0x10=Error
+Security: 0x00=None 0x01=HMAC-SHA256 0x02=AES-256-GCM
 ```
 
 ## The Problem
