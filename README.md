@@ -8,24 +8,31 @@
 **Wire protocol for AI agent communication with inspectable headers and semantic security.**
 
 ```
-0        7        15                 20B                        Variable
-├────────┼────────┼──────────────────┼────────────────────────────────────────┐
-│ Prefix │ Header │    Fixed Hdr     │ Routing Header     │ Compressed       │
-│#M2M|1| │ Len 2B │                  │ (variable)         │ Payload          │
-├────────┴────────┼────┬────┬────────┼────────────────────┼──────────────────┤
-│                 │Sch │Sec │ Flags  │ Model (len+str)    │                  │
-│                 │ 1B │ 1B │   4B   │ MsgCount (varint)  │ Brotli-encoded   │
-│                 │    │    │        │ Roles (2b packed)  │ JSON             │
-│                 │    │    │Reserved│ ContentHint (var)  │                  │
-│                 │    │    │  12B   │ MaxTokens (var)    │ (100% fidelity)  │
-│                 │    │    │        │ CostEst (f32)      │                  │
-├─────────────────┴────┴────┴────────┴────────────────────┼──────────────────┤
-│              ▲ Readable without decompression           │▲ Decode required │
-└─────────────────────────────────────────────────────────┴──────────────────┘
+M2M Frame (Security Mode = None)
+┌─────────┬────────────────────────┬────────────────────┬─────────┬───────┬──────────────┐
+│ Prefix  │     Fixed Header       │   Routing Header   │ Payload │ CRC32 │   Payload    │
+│ #M2M|1| │        (20B)           │     (variable)     │ Len 4B  │  4B   │  (compress)  │
+├─────────┼────┬────┬──────┬───────┼────────────────────┼─────────┴───────┴──────────────┤
+│         │Sch │Sec │Flags │Reserv │ Model (len+str)    │                                │
+│         │ 1B │ 1B │  4B  │ 12B   │ MsgCount (varint)  │  Brotli-compressed JSON        │
+│         │    │    │      │       │ Roles (2b packed)  │  (100% fidelity)               │
+│         │    │    │      │       │ ContentHint (var)  │                                │
+│         │    │    │      │       │ MaxTokens (var)    │                                │
+│         │    │    │      │       │ CostEst (f32)      │                                │
+├─────────┴────┴────┴──────┴───────┴────────────────────┼────────────────────────────────┤
+│             ▲ Readable without decompression          │ ▲ Requires decode              │
+└───────────────────────────────────────────────────────┴────────────────────────────────┘
+
+Security Modes:
+  None: [headers][payload_len][crc32][payload]
+  HMAC: [headers][payload_len][crc32][payload][hmac_tag:32B]
+  AEAD: [headers][nonce:12B][encrypted_payload + auth_tag:16B]
 
 Schema: 0x01=Request 0x02=Response 0x03=Stream 0x10=Error
-Security: 0x00=None 0x01=HMAC-SHA256 0x02=AES-256-GCM
+Sec:    0x00=None   0x01=HMAC-SHA256  0x02=AES-256-GCM
 ```
+
+Cognitive security (threat detection) operates pre-transmission — see [SecurityScanner](#cognitive-security).
 
 ## The Problem
 
