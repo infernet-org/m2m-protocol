@@ -36,25 +36,27 @@ When AI agents communicate at scale, they exchange massive amounts of JSON: conv
 
 As multi-agent systems scale, raw JSON becomes expensive. Cloud egress fees—charged when data leaves a provider's network—add up quickly.
 
-| Scale | Messages/Day | Payload | Monthly Traffic | With M2M (58%) | Saved |
-|-------|--------------|---------|-----------------|----------------|-------|
-| Startup | 100K | 2 KB | 180 GB | 76 GB | 104 GB |
-| Growth | 1M | 2 KB | 1.8 TB | 756 GB | 1 TB |
-| Scale | 10M | 2 KB | 18 TB | 7.6 TB | 10 TB |
-| Enterprise | 100M | 2 KB | 180 TB | 76 TB | 104 TB |
+| Scale | Messages/Day | ~Tokens/Day | Avg Payload | Monthly Egress | With M2M | Saved |
+|-------|--------------|-------------|-------------|----------------|----------|-------|
+| Startup | 100K | 60M | 2 KB | 6 GB | 2.5 GB | 3.5 GB |
+| Growth | 1M | 600M | 2 KB | 60 GB | 25 GB | 35 GB |
+| Scale | 10M | 6B | 2 KB | 600 GB | 252 GB | 348 GB |
+| Enterprise | 100M | 60B | 2 KB | 6 TB | 2.5 TB | 3.5 TB |
 
-**Cloud Egress Cost Impact** (2025 rates, internet egress):
+*Assumes ~600 tokens per 2KB message (typical multi-turn LLM API payload). M2M compression: 58%.*
 
-| Provider | Free Tier | Rate | 18 TB Raw | 7.6 TB (M2M) | Savings |
-|----------|-----------|------|-----------|--------------|---------|
-| AWS | 100 GB/mo | $0.05-0.09/GB | ~$1,500 | ~$630 | ~$870 |
-| Azure | 100 GB/mo | $0.087/GB | ~$1,560 | ~$650 | ~$910 |
-| GCP | varies | $0.08-0.12/GB | ~$1,800 | ~$760 | ~$1,040 |
-| Oracle | 10 TB/mo | $0.0085/GB | ~$68 | ~$0* | ~$68 |
+**Cloud Egress Cost Impact** (2025 rates, after free tier):
 
-*Oracle's 10TB free tier covers most M2M-compressed traffic at this scale.
+| Provider | Free Tier | Rate | 600 GB Raw | 252 GB (M2M) | Savings |
+|----------|-----------|------|------------|--------------|---------|
+| AWS | 100 GB/mo | $0.05-0.09/GB | ~$45 | ~$14 | ~$31 |
+| Azure | 100 GB/mo | $0.087/GB | ~$44 | ~$13 | ~$31 |
+| GCP | varies | $0.08-0.12/GB | ~$50 | ~$15 | ~$35 |
+| Oracle | 10 TB/mo | $0.0085/GB | ~$0* | ~$0* | — |
 
-> **Note**: Egress is billed on volume transferred. Compression directly reduces the bill—every byte saved is money saved. This compounds with other strategies like CDNs, regional locality, and private links.
+*Oracle's 10TB free tier covers most deployments at this scale.*
+
+> **Note**: Egress is billed on bytes transferred. Compression directly reduces the bill. This compounds with CDNs, regional locality, and private links.
 
 Every agent-to-agent message carries redundant JSON structure: `{"role":`, `"content":`, `"model":`, etc. M2M eliminates this overhead while keeping payloads routable.
 
