@@ -324,8 +324,22 @@ impl M2MFrame {
         plaintext.extend_from_slice(&self.checksum.to_le_bytes());
         plaintext.extend_from_slice(&payload_bytes);
 
-        // Generate nonce and encrypt
-        let nonce = security_ctx.next_nonce_deterministic();
+        // Generate cryptographically secure random nonce
+        #[cfg(feature = "crypto")]
+        let nonce = security_ctx.next_nonce();
+        #[cfg(not(feature = "crypto"))]
+        let nonce = {
+            // Fallback for non-crypto builds (NOT SECURE - testing only)
+            let mut n = [0u8; 12];
+            n[0..8].copy_from_slice(
+                &(std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos() as u64)
+                    .to_le_bytes(),
+            );
+            n
+        };
         let cipher = AeadCipher::new(security_ctx.key().clone())
             .map_err(|e| M2MError::Compression(format!("AEAD init failed: {}", e)))?;
 

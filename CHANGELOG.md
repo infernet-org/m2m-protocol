@@ -34,6 +34,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Benchmark binaries rewritten to test current algorithms
 - Documentation updated to reflect M2M v1 as primary format
 
+### Security
+
+- **Fixed nonce reuse vulnerability in AEAD encryption**
+  - Previous: Counter-based nonces reset to 0 on process restart
+  - Now: Fully random 96-bit nonces from CSPRNG
+  - This prevents catastrophic key recovery attacks from nonce reuse
+  - Deterministic nonces now restricted to test builds only (`#[cfg(test)]`)
+- Added nonce generation security documentation (Section 7.8.4)
+
 ### Removed
 
 - **BREAKING**: `Algorithm::Token` variant removed

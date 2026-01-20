@@ -121,13 +121,33 @@ pub const HMAC_TAG_SIZE: usize = 32;
 /// Minimum key size (256 bits)
 pub const MIN_KEY_SIZE: usize = 32;
 
-/// Security context for frame operations
+/// Security context for frame operations.
+///
+/// # Nonce Generation Strategy
+///
+/// This implementation uses **fully random 96-bit nonces** for AEAD encryption.
+/// This approach is chosen over counter-based nonces because:
+///
+/// 1. **Stateless**: No need to persist counter state across restarts
+/// 2. **Safe by default**: Counter-based nonces reset on restart → nonce reuse vulnerability
+/// 3. **Sufficient entropy**: 96-bit random nonces have birthday bound at 2^48 messages
+///
+/// For typical M2M sessions (thousands to millions of messages), the collision
+/// probability is negligible (~2^-49 for 2^24 messages).
+///
+/// # Security Considerations
+///
+/// - Nonces are generated using the system CSPRNG (`rand::thread_rng()`)
+/// - Each encryption operation gets a fresh random nonce
+/// - Nonce is prepended to ciphertext, so decryption doesn't need external state
+/// - If you need deterministic nonces for testing, use `next_nonce_deterministic()`
 #[derive(Debug, Clone)]
 pub struct SecurityContext {
     /// Key material for this context
     key: KeyMaterial,
-    /// Counter for nonce generation (AEAD mode)
-    nonce_counter: u64,
+    /// Counter for deterministic nonce generation (testing only)
+    #[cfg(test)]
+    test_nonce_counter: u64,
 }
 
 impl SecurityContext {
@@ -135,7 +155,8 @@ impl SecurityContext {
     pub fn new(key: KeyMaterial) -> Self {
         Self {
             key,
-            nonce_counter: 0,
+            #[cfg(test)]
+            test_nonce_counter: 0,
         }
     }
 
@@ -144,29 +165,37 @@ impl SecurityContext {
         &self.key
     }
 
-    /// Generate a unique nonce for AEAD
+    /// Generate a cryptographically secure random nonce for AEAD.
     ///
-    /// Nonce format: [counter:8][random:4]
-    /// This ensures uniqueness even with clock skew
+    /// Uses the system CSPRNG to generate a fresh 96-bit (12-byte) nonce
+    /// for each encryption operation. This is the recommended approach
+    /// for ChaCha20-Poly1305 as it avoids nonce-reuse vulnerabilities
+    /// that can occur with counter-based schemes after process restarts.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the system CSPRNG fails (should never happen on supported platforms).
     #[cfg(feature = "crypto")]
     pub fn next_nonce(&mut self) -> [u8; NONCE_SIZE] {
         use rand::RngCore;
 
         let mut nonce = [0u8; NONCE_SIZE];
-        nonce[0..8].copy_from_slice(&self.nonce_counter.to_le_bytes());
-
-        let mut rng = rand::thread_rng();
-        rng.fill_bytes(&mut nonce[8..12]);
-
-        self.nonce_counter = self.nonce_counter.wrapping_add(1);
+        rand::thread_rng().fill_bytes(&mut nonce);
         nonce
     }
 
-    /// Generate a nonce without random component (for testing/deterministic use)
+    /// Generate a deterministic nonce for testing purposes only.
+    ///
+    /// **WARNING**: Do not use in production! Counter-based nonces without
+    /// persistence will cause nonce reuse after process restarts, which
+    /// completely breaks ChaCha20-Poly1305 security.
+    ///
+    /// This method is only available in test builds.
+    #[cfg(test)]
     pub fn next_nonce_deterministic(&mut self) -> [u8; NONCE_SIZE] {
         let mut nonce = [0u8; NONCE_SIZE];
-        nonce[0..8].copy_from_slice(&self.nonce_counter.to_le_bytes());
-        self.nonce_counter = self.nonce_counter.wrapping_add(1);
+        nonce[0..8].copy_from_slice(&self.test_nonce_counter.to_le_bytes());
+        self.test_nonce_counter = self.test_nonce_counter.wrapping_add(1);
         nonce
     }
 }
@@ -176,7 +205,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_security_context_nonce_uniqueness() {
+    fn test_security_context_deterministic_nonce() {
         let key = KeyMaterial::new(vec![0u8; 32]);
         let mut ctx = SecurityContext::new(key);
 
@@ -184,14 +213,51 @@ mod tests {
         let nonce2 = ctx.next_nonce_deterministic();
         let nonce3 = ctx.next_nonce_deterministic();
 
-        // Nonces should be unique
+        // Deterministic nonces should be unique and sequential
         assert_ne!(nonce1, nonce2);
         assert_ne!(nonce2, nonce3);
         assert_ne!(nonce1, nonce3);
 
-        // Counter should increment
+        // Counter should increment (first 8 bytes)
         assert_eq!(nonce1[0], 0);
         assert_eq!(nonce2[0], 1);
         assert_eq!(nonce3[0], 2);
+    }
+
+    #[test]
+    #[cfg(feature = "crypto")]
+    fn test_security_context_random_nonce_uniqueness() {
+        let key = KeyMaterial::new(vec![0u8; 32]);
+        let mut ctx = SecurityContext::new(key);
+
+        // Generate many nonces and verify they're all unique
+        let mut nonces = std::collections::HashSet::new();
+        for _ in 0..1000 {
+            let nonce = ctx.next_nonce();
+            assert!(
+                nonces.insert(nonce),
+                "Random nonce collision detected (extremely unlikely)"
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "crypto")]
+    fn test_security_context_random_nonce_entropy() {
+        let key = KeyMaterial::new(vec![0u8; 32]);
+        let mut ctx = SecurityContext::new(key);
+
+        // Verify nonces aren't all zeros or trivial patterns
+        let nonce = ctx.next_nonce();
+        let zeros: [u8; NONCE_SIZE] = [0u8; NONCE_SIZE];
+        assert_ne!(nonce, zeros, "Random nonce should not be all zeros");
+
+        // Check that multiple bytes have non-zero values (basic entropy check)
+        let non_zero_count = nonce.iter().filter(|&&b| b != 0).count();
+        assert!(
+            non_zero_count >= 3,
+            "Random nonce should have reasonable entropy, got {} non-zero bytes",
+            non_zero_count
+        );
     }
 }
