@@ -5,19 +5,22 @@
 [![Rust](https://img.shields.io/badge/rust-1.79+-orange.svg)](https://www.rust-lang.org/)
 [![Tests](https://img.shields.io/badge/tests-220%20passing-brightgreen.svg)]()
 
-**The wire protocol for machine-to-machine AI agent communication.**
+**Wire protocol for AI agent communication with inspectable headers and semantic security.**
 
 ```
-┌────────────────────────────────────────────────────────────────┐
-│  BEFORE                           AFTER                        │
-│  ────────────────────────────     ────────────────────────     │
-│  {"model":"gpt-4o",               #M2M|1|<binary>              │
-│   "messages":[                                                 │
-│     {"role":"system",...},        2.4 KB → 1.0 KB              │
-│     {"role":"user",...}           58% smaller on the wire      │
-│   ],                              Headers readable without     │
-│   "temperature":0.7}              decompressing payload        │
-└────────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────────────────┐
+│                            M2M Frame Structure                            │
+├─────────┬─────────────────────────┬──────────────┬────────────────────────┤
+│ Prefix  │    Fixed Header (20B)   │   Routing    │   Compressed Payload   │
+│ #M2M|1| │                         │   Header     │                        │
+├─────────┼────────┬────────┬───────┼──────────────┼────────────────────────┤
+│         │ Schema │ Sec    │ Flags │ Model        │                        │
+│         │ 1B     │ Mode   │ 4B    │ Msg Count    │  Brotli-compressed     │
+│         │        │ 1B     │       │ Token Est    │  JSON (100% fidelity)  │
+│         │        │        │       │ Cost Est     │                        │
+├─────────┴────────┴────────┴───────┴──────────────┼────────────────────────┤
+│         ▲ Readable without decompression         │ ▲ Requires decode      │
+└──────────────────────────────────────────────────┴────────────────────────┘
 ```
 
 ## The Problem
