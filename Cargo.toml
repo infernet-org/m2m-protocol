@@ -2,7 +2,7 @@
 name = "m2m-core"
 version = "0.4.0"
 edition = "2021"
-rust-version = "1.79"
+rust-version = "1.80"
 license = "Apache-2.0"
 description = "M2M Protocol - Intelligent machine-to-machine LLM communication with learned compression"
 repository = "https://github.com/infernet-org/m2m-protocol"
@@ -219,6 +219,7 @@ single_match_else = "allow"            # match with else can be clearer
 cast_possible_wrap = "allow"           # usize to i64 is intentional
 manual_range_contains = "allow"        # Manual checks can be clearer
 implicit_saturating_sub = "allow"      # Manual arithmetic is fine
+non_std_lazy_statics = "allow"         # lazy_static! is fine, LazyLock migration not urgent
 
 # Cargo
 multiple_crate_versions = "allow"      # Common in large dependency trees

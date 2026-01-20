@@ -29,25 +29,25 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --all-targets --features crypto -- -D warnings
 
       - name: Build
-        run: cargo build --release
+        run: cargo build --release --features crypto
 
       - name: Run tests
-        run: cargo test --lib
+        run: cargo test --features crypto
 
       - name: Doc tests
-        run: cargo test --doc
+        run: cargo test --doc --features crypto
 
   msrv:
-    name: MSRV (1.79)
+    name: MSRV (1.80)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust 1.79
-        uses: dtolnay/rust-toolchain@1.79
+      - name: Install Rust 1.80
+        uses: dtolnay/rust-toolchain@1.80
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2

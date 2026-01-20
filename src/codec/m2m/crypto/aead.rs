@@ -272,15 +272,22 @@ mod tests {
         let cipher = AeadCipher::new(test_key()).unwrap();
         let plaintext = b"Hello, World!";
 
-        let ciphertext = cipher
-            .encrypt(plaintext, &test_nonce(), b"correct aad")
-            .unwrap();
-
         // Wrong AAD should fail (with crypto feature)
         #[cfg(feature = "crypto")]
         {
+            let ciphertext = cipher
+                .encrypt(plaintext, &test_nonce(), b"correct aad")
+                .unwrap();
             let result = cipher.decrypt(&ciphertext, b"wrong aad");
             assert!(result.is_err());
+        }
+
+        // Without crypto, just verify encryption works
+        #[cfg(not(feature = "crypto"))]
+        {
+            let _ = cipher
+                .encrypt(plaintext, &test_nonce(), b"correct aad")
+                .unwrap();
         }
     }
 

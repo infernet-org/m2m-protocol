@@ -28,7 +28,9 @@ use clap::{Parser, ValueEnum};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use m2m::codec::m2m::{M2MCodec, M2MFrame, SecurityMode};
+#[cfg(feature = "crypto")]
+use m2m::codec::m2m::SecurityMode;
+use m2m::codec::m2m::{M2MCodec, M2MFrame};
 use m2m::codec::{Algorithm, CodecEngine, StreamingCodec, StreamingMode};
 use m2m::models::Encoding;
 use m2m::protocol::{Capabilities, Session};
