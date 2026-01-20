@@ -34,7 +34,7 @@ When AI agents communicate at scale, they exchange massive amounts of JSON: conv
 
 ## The Problem
 
-As multi-agent systems scale, raw JSON becomes a bottleneck:
+As multi-agent systems scale, raw JSON becomes a bottleneck. Cloud egress fees—charged when data leaves a provider's network—add up quickly.
 
 | Scale | Messages/Day | Payload | Monthly Traffic | With M2M (58%) | Saved |
 |-------|--------------|---------|-----------------|----------------|-------|
@@ -43,16 +43,18 @@ As multi-agent systems scale, raw JSON becomes a bottleneck:
 | Scale | 10M | 2 KB | 18 TB | 7.6 TB | 10 TB |
 | Enterprise | 100M | 2 KB | 180 TB | 76 TB | 104 TB |
 
-**AWS Egress Cost Impact** (Data Transfer Out, US regions):
+**Cloud Egress Cost Impact** (2025 rates, internet egress):
 
-| Monthly Traffic | Raw Cost | With M2M | Savings/Month |
-|-----------------|----------|----------|---------------|
-| 180 GB | $16 | $7 | $9 |
-| 1.8 TB | $162 | $68 | $94 |
-| 18 TB | $1,494 | $628 | $866 |
-| 180 TB | $10,494 | $4,408 | $6,086 |
+| Provider | Free Tier | Rate | 18 TB Raw | 7.6 TB (M2M) | Savings |
+|----------|-----------|------|-----------|--------------|---------|
+| AWS | 100 GB/mo | $0.05-0.09/GB | ~$1,500 | ~$630 | ~$870 |
+| Azure | 100 GB/mo | $0.087/GB | ~$1,560 | ~$650 | ~$910 |
+| GCP | varies | $0.08-0.12/GB | ~$1,800 | ~$760 | ~$1,040 |
+| Oracle | 10 TB/mo | $0.0085/GB | ~$68 | ~$0* | ~$68 |
 
-*AWS pricing: $0.09/GB (first 10TB), $0.085/GB (next 40TB), $0.07/GB (next 100TB), $0.05/GB (150TB+)*
+*Oracle's 10TB free tier covers most M2M-compressed traffic at this scale.
+
+> **Note**: Egress is billed on volume transferred. Compression directly reduces the bill—every byte saved is money saved. This compounds with other strategies like CDNs, regional locality, and private links.
 
 Every agent-to-agent message carries redundant JSON structure: `{"role":`, `"content":`, `"model":`, etc. M2M eliminates this overhead while keeping payloads routable.
 
