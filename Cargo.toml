@@ -2,7 +2,7 @@
 name = "m2m-core"
 version = "0.4.0"
 edition = "2021"
-rust-version = "1.80"
+rust-version = "1.82"
 license = "Apache-2.0"
 description = "M2M Protocol - Intelligent machine-to-machine LLM communication with learned compression"
 repository = "https://github.com/infernet-org/m2m-protocol"
@@ -185,6 +185,7 @@ cast_lossless = "allow"                # u8 to u32 is fine
 unnecessary_wraps = "allow"            # Result<T> for consistency
 redundant_closure_for_method_calls = "allow"  # Clearer in some contexts
 only_used_in_recursion = "allow"       # False positives with &self in recursive fns
+manual_repeat_n = "allow"              # repeat().take() is clearer than repeat_n() for MSRV compat
 unused_self = "allow"                  # Preparation for future use
 manual_let_else = "allow"              # match is sometimes clearer
 return_self_not_must_use = "allow"     # Builder pattern methods
