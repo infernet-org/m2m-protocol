@@ -6,6 +6,7 @@
 //! - **ChaCha20-Poly1305 AEAD**: Authenticated encryption (confidentiality + integrity)
 //! - **HKDF key derivation**: Derive session keys from master secrets
 //! - **X25519 key exchange**: Establish shared secrets between agents
+//! - **Hierarchical Key Derivation**: Multi-agent key management from shared master
 //!
 //! # Security Modes
 //!
@@ -17,11 +18,32 @@
 //!
 //! # Key Management
 //!
-//! Two key derivation approaches are supported:
+//! Three key management approaches are supported:
 //!
-//! ## Same-Owner M2M (HKDF)
+//! ## Same-Owner M2M (HKDF Hierarchy)
 //!
-//! When both agents share a master secret (e.g., same organization):
+//! When agents belong to the same organization, use hierarchical key derivation:
+//!
+//! ```text
+//! Organization Master Secret
+//!     │
+//!     ├─[HKDF]─► "m2m/v1/{org}/agent-001" ─► Agent 001 Key
+//!     ├─[HKDF]─► "m2m/v1/{org}/agent-002" ─► Agent 002 Key
+//!     └─[HKDF]─► "m2m/v1/{org}/session/agent-001:agent-002/sess-id" ─► Session Key
+//! ```
+//!
+//! All agents can derive session keys without explicit key exchange:
+//!
+//! ```ignore
+//! use m2m::codec::m2m::crypto::{KeyHierarchy, AgentId};
+//!
+//! let hierarchy = KeyHierarchy::new(master_secret, "org-acme");
+//! let session = hierarchy.derive_session_key(&agent_a, &agent_b, "session-123")?;
+//! ```
+//!
+//! ## Same-Owner M2M (Simple HKDF)
+//!
+//! For simpler cases without hierarchy:
 //!
 //! ```text
 //! master_secret -> HKDF-Expand -> session_key
@@ -29,7 +51,7 @@
 //!
 //! ## Cross-Owner M2M (X25519 + HKDF)
 //!
-//! When agents need to establish a shared secret:
+//! When agents need to establish a shared secret across organizations:
 //!
 //! ```text
 //! Agent A: (sk_a, pk_a) = X25519::generate()
@@ -58,6 +80,14 @@
 //! ```toml
 //! m2m-core = { version = "0.4", features = ["crypto"] }
 //! ```
+//!
+//! # Test Vectors
+//!
+//! This implementation is validated against:
+//! - RFC 5869 HKDF test vectors (Appendix A)
+//! - M2M-specific test vectors for external compatibility
+//!
+//! See `keyring::rfc5869_tests` and `hierarchy::tests` for details.
 
 mod aead;
 mod hmac_auth;
@@ -66,12 +96,18 @@ mod keyring;
 #[cfg(feature = "crypto")]
 mod exchange;
 
+#[cfg(feature = "crypto")]
+mod hierarchy;
+
 pub use aead::{AeadCipher, AeadError};
 pub use hmac_auth::{HmacAuth, HmacError};
 pub use keyring::{KeyId, KeyMaterial, Keyring, KeyringError};
 
 #[cfg(feature = "crypto")]
 pub use exchange::{KeyExchange, KeyPair};
+
+#[cfg(feature = "crypto")]
+pub use hierarchy::{AgentId, AgentKeyContext, KeyHierarchy, KeyPurpose};
 
 /// Nonce size for ChaCha20-Poly1305 (96 bits)
 pub const NONCE_SIZE: usize = 12;

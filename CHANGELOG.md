@@ -17,6 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - HMAC message authentication
   - AEAD encryption with ChaCha20-Poly1305
   - X25519 key exchange for session keys
+- **Hierarchical Key Derivation** (feature: `crypto`)
+  - HKDF-based multi-agent key management
+  - Derive unique keys for 100+ agents from single master secret
+  - Symmetric session key derivation between agents
+  - RFC 5869 compliant with official test vectors
+  - Documented test vectors for external implementation compatibility
 - **Stress test binary** (`m2m_stress_test`) for performance validation
 - **Streaming M2M** compression/decompression finalized
 

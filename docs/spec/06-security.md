@@ -192,11 +192,10 @@ TLS provides message integrity via authenticated encryption.
 
 ### 7.7.2 Application Integrity
 
-M2M Protocol does NOT provide application-layer integrity.
+M2M Protocol provides optional application-layer integrity via the `crypto` feature:
 
-For additional integrity:
-- Implementations MAY add HMAC to payloads
-- Implementations MAY use content hashing
+- **HMAC-SHA256**: Authentication tag appended to frame (32 bytes)
+- **ChaCha20-Poly1305 AEAD**: Authenticated encryption with 16-byte tag
 
 ### 7.7.3 Replay Protection
 
@@ -208,9 +207,83 @@ M2M Protocol does NOT provide replay protection.
 - Implementations MAY add timestamps with rejection of stale messages
 - Implementations MAY add nonces for replay detection
 
-## 7.8 Privacy Considerations
+## 7.8 Cryptographic Key Management
 
-### 7.8.1 Metadata Exposure
+### 7.8.1 Key Hierarchy (HKDF)
+
+M2M supports hierarchical key derivation using HKDF-SHA256 (RFC 5869).
+
+**Same-Organization Key Derivation:**
+
+```
+Organization Master Secret
+    │
+    ├─[HKDF]─► "m2m/v1/{org}/agent-001" ─► Agent 001 Key
+    ├─[HKDF]─► "m2m/v1/{org}/agent-002" ─► Agent 002 Key
+    └─[HKDF]─► "m2m/v1/{org}/session/{a}:{b}/{session_id}" ─► Session Key
+```
+
+**Derivation Paths:**
+
+| Path | Purpose |
+|------|---------|
+| `m2m/v1/{org}` | Organization-level key |
+| `m2m/v1/{org}/{agent}` | Agent identity key |
+| `m2m/v1/{org}/{agent}/{purpose}` | Purpose-specific key (encryption/auth) |
+| `m2m/v1/{org}/session/{a}:{b}/{sid}` | Session key between agents |
+| `m2m/v1/{org}/shared` | Shared organization broadcast key |
+
+**Security Properties:**
+
+- All derivations are deterministic (same inputs → same output)
+- Session keys are symmetric (agent order doesn't matter)
+- Maximum output length: 8160 bytes (255 × 32)
+- Validated against RFC 5869 test vectors
+
+### 7.8.2 Cross-Organization Key Exchange
+
+For agents in different organizations, use X25519 Diffie-Hellman:
+
+```
+Agent A: (sk_a, pk_a) = X25519::generate()
+Agent B: (sk_b, pk_b) = X25519::generate()
+
+shared_secret = X25519(sk_a, pk_b) = X25519(sk_b, pk_a)
+session_key = HKDF(shared_secret, "m2m-session-v1", 32)
+```
+
+### 7.8.3 Key Zeroization
+
+Key material SHOULD be zeroized on drop:
+
+```rust
+impl Drop for KeyMaterial {
+    fn drop(&mut self) {
+        for byte in &mut self.bytes {
+            *byte = 0;
+        }
+    }
+}
+```
+
+**Note:** For production use, consider using the `zeroize` crate for
+compiler-guaranteed zeroization.
+
+### 7.8.4 Test Vectors
+
+For implementation compatibility, use this test vector:
+
+```
+Master Key:  000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f
+Org ID:      test-org
+Agent ID:    agent-001
+Path:        m2m/v1/test-org/agent-001
+Output:      c87f687fae1cf5991cd0cc64e113ec09750b0d1c41338a41cd8ad90bdd60dba1
+```
+
+## 7.9 Privacy Considerations
+
+### 7.9.1 Metadata Exposure
 
 Compression dictionaries are public. However:
 
@@ -218,7 +291,7 @@ Compression dictionaries are public. However:
 - Timing MAY reveal content complexity
 - Session patterns MAY reveal usage patterns
 
-### 7.8.2 Logging Recommendations
+### 7.9.2 Logging Recommendations
 
 Implementations:
 - SHOULD NOT log message payloads by default
@@ -226,35 +299,35 @@ Implementations:
 - MUST NOT log credentials or API keys
 - MAY log metadata (size, algorithm, timing) for debugging
 
-### 7.8.3 Data Retention
+### 7.9.3 Data Retention
 
 - Session state SHOULD be cleared after closure
 - Compression statistics MAY be retained for analytics
 - Security scan results MAY be retained for audit
 
-## 7.9 Implementation Security
+## 7.10 Implementation Security
 
-### 7.9.1 Memory Safety
+### 7.10.1 Memory Safety
 
 - Use memory-safe languages (Rust) when possible
 - Validate all input before processing
 - Clear sensitive data after use
 
-### 7.9.2 Dependency Security
+### 7.10.2 Dependency Security
 
 - Audit dependencies regularly
 - Use dependency scanning (cargo-audit)
 - Pin dependency versions
 
-### 7.9.3 Side Channels
+### 7.10.3 Side Channels
 
 - Constant-time comparison for security-sensitive operations
 - Avoid branching on secret data
 - Consider timing attacks in high-security contexts
 
-## 7.10 Security Checklist
+## 7.11 Security Checklist
 
-### 7.10.1 Deployment Checklist
+### 7.11.1 Deployment Checklist
 
 - [ ] TLS 1.2+ enabled
 - [ ] Certificate validation enabled
@@ -265,7 +338,7 @@ Implementations:
 - [ ] Logging configured (no sensitive data)
 - [ ] Dependency audit completed
 
-### 7.10.2 Development Checklist
+### 7.11.2 Development Checklist
 
 - [ ] Input validation on all message fields
 - [ ] Error messages do not leak sensitive information

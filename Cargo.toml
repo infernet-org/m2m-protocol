@@ -127,6 +127,7 @@ rand = { version = "0.8", optional = true }
 criterion = { version = "0.5", features = ["html_reports"] }
 tokio-test = "0.4"
 tempfile = "3.0"
+hex-literal = "0.4"  # For RFC test vectors
 
 [build-dependencies]
 phf_codegen = "0.11"
@@ -160,6 +161,8 @@ crypto = ["dep:hkdf", "dep:sha2", "dep:hmac", "dep:chacha20poly1305", "dep:x2551
 unsafe_code = "warn"
 # Documentation
 missing_docs = "warn"
+# Allow unknown lints for cross-version compatibility (lint names change between Rust versions)
+unknown_lints = "allow"
 
 [lints.clippy]
 # Pedantic (enable selectively) - set lowest priority
@@ -185,7 +188,7 @@ cast_lossless = "allow"                # u8 to u32 is fine
 unnecessary_wraps = "allow"            # Result<T> for consistency
 redundant_closure_for_method_calls = "allow"  # Clearer in some contexts
 only_used_in_recursion = "allow"       # False positives with &self in recursive fns
-self_only_used_in_recursion = "allow"  # Same lint, renamed in newer clippy
+self_only_used_in_recursion = "allow"  # Same lint, renamed in Rust 1.92+
 manual_repeat_n = "allow"              # repeat().take() is clearer than repeat_n() for MSRV compat
 unused_self = "allow"                  # Preparation for future use
 manual_let_else = "allow"              # match is sometimes clearer
