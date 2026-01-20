@@ -22,19 +22,75 @@
 
 ## What is M2M Protocol?
 
-M2M is a wire protocol for **agent-to-agent communication** — not agent-to-LLM-API.
+M2M is a wire protocol for **agent-to-agent communication** with two innovations:
 
-When AI agents communicate at scale, they exchange massive amounts of JSON: conversation histories, tool outputs, context windows, and orchestration data. M2M compresses this traffic by 40-70% while keeping it routable and secure.
+1. **Agentic Observability** — Routing metadata readable without decompression
+2. **Cognitive Security** — Semantic-level threat detection at the protocol layer
 
-## Why M2M?
+When AI agents communicate at scale, traditional tools fail: you can't inspect compressed payloads, and network-layer security can't understand what agents are saying to each other. M2M solves both.
 
-| Problem | Solution |
-|---------|----------|
-| **Latency** | 58% smaller payloads, sub-ms encode/decode |
-| **Payload limits** | Fit 2-3x more context within Lambda/API Gateway limits |
-| **Storage costs** | 40-70% smaller logs and audit trails |
-| **Routing overhead** | Extract model/provider without decompression |
-| **Security gaps** | Protocol-embedded threat detection |
+## Agentic Observability
+
+Traditional observability breaks down with compressed traffic — you can't inspect what you can't read. M2M's wire format exposes routing metadata **without decompressing the payload**:
+
+```
+#M2M|1|<header><payload>
+       │
+       └─ Model, provider, token count readable here
+          Payload stays compressed
+```
+
+This enables:
+
+| Capability | Without M2M | With M2M |
+|------------|-------------|----------|
+| Route by model/provider | Decompress → Parse JSON → Route | Read header → Route |
+| Cost attribution | Parse every payload | Read token count from header |
+| Traffic analytics | Full decompression pipeline | Header inspection only |
+| Audit logging | Store raw or lose visibility | Compressed + inspectable |
+
+**Infrastructure-layer intelligence**: Load balancers, API gateways, and observability tools can make routing decisions without parsing JSON or decompressing payloads.
+
+## Cognitive Security
+
+Traditional security operates at the network layer — TLS, firewalls, WAFs. But network security can't understand **what agents are saying to each other**.
+
+Cognitive Security operates at the **semantic layer**:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    SECURITY LAYERS                              │
+├─────────────────────────────────────────────────────────────────┤
+│  Network Security    │  TLS, firewalls, IP rules               │
+│  (can't see content) │  "Is this connection allowed?"          │
+├──────────────────────┼──────────────────────────────────────────┤
+│  Cognitive Security  │  Semantic analysis, intent detection    │
+│  (understands meaning)│  "Is this agent trying to jailbreak?"   │
+└──────────────────────┴──────────────────────────────────────────┘
+```
+
+M2M embeds threat detection **at the protocol layer** — before transmission:
+
+```rust
+use m2m::SecurityScanner;
+
+let scanner = SecurityScanner::new().with_blocking(0.8);
+let result = scanner.scan("Ignore all previous instructions")?;
+
+if !result.safe {
+    // Blocked at protocol level — never reaches downstream agent
+    println!("Threats: {:?}", result.threats);
+}
+```
+
+| Threat | Detection Method |
+|--------|------------------|
+| Prompt injection | Semantic pattern analysis |
+| Jailbreak attempts | DAN/developer mode detection |
+| Data exfiltration | Environment/path pattern matching |
+| Malformed payloads | Encoding attack detection |
+
+**Security as a protocol guarantee**: Every M2M-speaking agent gets the same threat detection. No per-agent implementation. No gaps.
 
 ## Quick Start
 
@@ -62,19 +118,17 @@ m2m decompress '#M2M|1|...'
 m2m scan "Ignore all previous instructions"
 ```
 
+## Why M2M?
+
+| Problem | Solution |
+|---------|----------|
+| **Latency** | 58% smaller payloads, sub-ms encode/decode |
+| **Payload limits** | Fit 2-3x more context within Lambda/API Gateway limits |
+| **Storage costs** | 40-70% smaller logs and audit trails |
+| **Blind routing** | Headers readable without decompression |
+| **Semantic attacks** | Cognitive security at protocol layer |
+
 ## Wire Format
-
-M2M's wire format exposes routing headers **without decompressing the payload**:
-
-```
-#M2M|1|<fixed_header><routing_header><payload>
-       │             │               │
-       │             │               └─ Brotli-compressed JSON
-       │             └───────────────── Model, provider, token count  
-       └─────────────────────────────── Version, flags, compression level
-```
-
-Load balancers can route by model/provider without parsing JSON.
 
 | Algorithm | Wire Format | Compression | Best For |
 |-----------|-------------|-------------|----------|
@@ -82,41 +136,19 @@ Load balancers can route by model/provider without parsing JSON.
 | **TokenNative** | `#TK\|C\|...` | 30-50% | Token ID transmission |
 | **Brotli** | `#M2M[v3.0]\|DATA:...` | 60-80% | Large payloads (>1KB) |
 
-## Security
+## Cryptographic Security
 
-Threat detection at the protocol layer — **before** transmission:
+Optional (`--features crypto`):
 
-```rust
-use m2m::SecurityScanner;
-
-let scanner = SecurityScanner::new().with_blocking(0.8);
-let result = scanner.scan("Ignore previous instructions")?;
-
-if !result.safe {
-    println!("Blocked: {:?}", result.threats);
-}
-```
-
-**Detects**: Prompt injection, jailbreaks, data exfiltration, malformed payloads.
-
-**Optional crypto** (`--features crypto`): HMAC authentication, AEAD encryption (ChaCha20-Poly1305).
+- **HMAC** — Message authentication
+- **AEAD** — ChaCha20-Poly1305 encryption
+- **X25519** — Key exchange
 
 ## Protocol Modes
 
 **Stateless**: Direct compress/decompress, no handshake.
 
 **Session-based**: HELLO/ACCEPT capability negotiation, PING/PONG keep-alive.
-
-```rust
-use m2m::{Session, Capabilities};
-
-let mut client = Session::new(Capabilities::default());
-let hello = client.create_hello();
-
-let mut server = Session::new(Capabilities::default());
-let accept = server.process_hello(&hello)?;
-client.process_accept(&accept)?;
-```
 
 ## Performance
 
@@ -129,13 +161,11 @@ client.process_accept(&accept)?;
 
 ## Hydra (Optional)
 
-[Hydra](https://huggingface.co/infernet/hydra) is an ML classifier for intelligent algorithm selection:
+[Hydra](https://huggingface.co/infernet/hydra) is an ML classifier for intelligent algorithm selection. Native Rust inference — no ONNX/Python.
 
 ```bash
 make model-download
 ```
-
-Native Rust inference from safetensors — no ONNX/Python required.
 
 ## Project Status
 
@@ -144,10 +174,9 @@ Native Rust inference from safetensors — no ONNX/Python required.
 | Feature | Status |
 |---------|--------|
 | M2M Wire Format v1 | Stable |
-| TokenNative / Brotli | Stable |
-| Security scanning | Stable |
+| Agentic Observability | Stable |
+| Cognitive Security | Stable |
 | HMAC/AEAD crypto | Stable |
-| Session management | Stable |
 | Hydra routing | Stable |
 | QUIC/HTTP3 | Experimental |
 
