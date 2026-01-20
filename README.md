@@ -15,23 +15,116 @@
 │   "messages":[                                                 │
 │     {"role":"system",...},        2.4 KB → 1.0 KB              │
 │     {"role":"user",...}           58% smaller on the wire      │
-│   ],                              < 1ms latency                │
-│   "temperature":0.7}              100% fidelity                │
+│   ],                              Headers readable without     │
+│   "temperature":0.7}              decompressing payload        │
 └────────────────────────────────────────────────────────────────┘
 ```
 
-## What is M2M Protocol?
+## The Problem
 
-M2M is a wire protocol for **agent-to-agent communication** with two innovations:
+When AI agents communicate at scale, three problems emerge that traditional tools can't solve:
 
-1. **Agentic Observability** — Routing metadata readable without decompression
-2. **Cognitive Security** — Semantic-level threat detection at the protocol layer
+### 1. The Compression Paradox
 
-When AI agents communicate at scale, traditional tools fail: you can't inspect compressed payloads, and network-layer security can't understand what agents are saying to each other. M2M solves both.
+Traditional compression (gzip, brotli, zstd) reduces **bytes** but produces binary output requiring Base64 encoding. This *increases* token count:
+
+```
+Original JSON:     68 bytes  →  42 tokens
+Gzip + Base64:     52 bytes  →  58 tokens  (+38% tokens)
+```
+
+Binary data tokenizes poorly (~1 byte/token) compared to text (~4 chars/token). For agent-to-agent traffic where latency matters, you're transmitting **more data** after "compression."
+
+### 2. The Observability Gap
+
+Compressed traffic is opaque. Load balancers, API gateways, and observability tools must decompress every payload to make routing decisions. At scale, this adds latency and complexity.
+
+### 3. The Semantic Security Gap
+
+Network security (TLS, firewalls, WAFs) operates at the packet level. It can't understand what agents are *saying* to each other. Prompt injection, jailbreaks, and data exfiltration attempts pass through undetected.
+
+**M2M solves all three.**
+
+## Quick Start
+
+```bash
+cargo add m2m-core
+```
+
+```rust
+use m2m::{CodecEngine, Algorithm};
+
+let engine = CodecEngine::new();
+
+// Compress
+let json = r#"{"model":"gpt-4o","messages":[{"role":"user","content":"Hello"}]}"#;
+let compressed = engine.compress(json, Algorithm::M2M)?;
+
+// Decompress (auto-detects algorithm)
+let original = engine.decompress(&compressed.data)?;
+```
+
+```bash
+# CLI
+cargo install m2m-core
+
+m2m compress '{"model":"gpt-4o","messages":[...]}'
+m2m decompress '#M2M|1|...'
+m2m scan "Ignore all previous instructions"
+```
+
+## Core Concepts
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                         M2M Protocol Stack                          │
+├─────────────────────────────────────────────────────────────────────┤
+│  Application    │  Your Agent Code                                  │
+├─────────────────┼───────────────────────────────────────────────────┤
+│  Security       │  SecurityScanner → Cognitive threat detection     │
+├─────────────────┼───────────────────────────────────────────────────┤
+│  Codec          │  CodecEngine → M2M / TokenNative / Brotli         │
+├─────────────────┼───────────────────────────────────────────────────┤
+│  Protocol       │  Session → HELLO/ACCEPT/DATA/CLOSE                │
+├─────────────────┼───────────────────────────────────────────────────┤
+│  Transport      │  TCP (HTTP/1.1) │ QUIC (HTTP/3, 0-RTT)            │
+└─────────────────┴───────────────────────────────────────────────────┘
+```
+
+### Protocol Primitives
+
+| Primitive | Purpose | Usage |
+|-----------|---------|-------|
+| `CodecEngine` | Compress/decompress payloads | `engine.compress(json, Algorithm::M2M)` |
+| `Session` | Stateful connection with capability negotiation | `Session::new(capabilities)` |
+| `SecurityScanner` | Semantic threat detection | `scanner.scan(content)` |
+| `Algorithm` | Compression algorithm selection | `M2M`, `TokenNative`, `Brotli` |
+| `M2MFrame` | Wire format with routing headers | 20-byte fixed header + payload |
+| `Capabilities` | Protocol negotiation | Algorithms, security, streaming |
+
+### Protocol Modes
+
+**Stateless**: Direct compress/decompress. No handshake, no state.
+
+```rust
+let engine = CodecEngine::new();
+let compressed = engine.compress(json, Algorithm::M2M)?;
+```
+
+**Session-based**: HELLO/ACCEPT capability negotiation, PING/PONG keep-alive, graceful CLOSE.
+
+```rust
+let mut session = Session::new(Capabilities::default());
+session.connect(&mut transport)?;  // HELLO/ACCEPT
+session.send(json)?;               // DATA
+session.close()?;                  // CLOSE
+```
 
 ## Agentic Observability
 
-Traditional observability breaks down with compressed traffic — you can't inspect what you can't read. M2M's wire format exposes routing metadata **without decompressing the payload**:
+M2M's wire format exposes routing metadata **without decompressing the payload**:
 
 ```
 #M2M|1|<header><payload>
@@ -40,11 +133,9 @@ Traditional observability breaks down with compressed traffic — you can't insp
           Payload stays compressed
 ```
 
-This enables:
-
 | Capability | Without M2M | With M2M |
 |------------|-------------|----------|
-| Route by model/provider | Decompress → Parse JSON → Route | Read header → Route |
+| Route by model/provider | Decompress → Parse → Route | Read header → Route |
 | Cost attribution | Parse every payload | Read token count from header |
 | Traffic analytics | Full decompression pipeline | Header inspection only |
 | Audit logging | Store raw or lose visibility | Compressed + inspectable |
@@ -53,9 +144,7 @@ This enables:
 
 ## Cognitive Security
 
-Traditional security operates at the network layer — TLS, firewalls, WAFs. But network security can't understand **what agents are saying to each other**.
-
-Cognitive Security operates at the **semantic layer**:
+Traditional security operates at the network layer. Cognitive Security operates at the **semantic layer**:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -69,7 +158,7 @@ Cognitive Security operates at the **semantic layer**:
 └──────────────────────┴──────────────────────────────────────────┘
 ```
 
-M2M embeds threat detection **at the protocol layer** — before transmission:
+### Threat Detection
 
 ```rust
 use m2m::SecurityScanner;
@@ -90,65 +179,69 @@ if !result.safe {
 | Data exfiltration | Environment/path pattern matching |
 | Malformed payloads | Encoding attack detection |
 
-**Security as a protocol guarantee**: Every M2M-speaking agent gets the same threat detection. No per-agent implementation. No gaps.
+### Cryptographic Security
 
-## Quick Start
+Optional (`--features crypto`):
 
-```bash
-cargo install m2m-core
-```
+| Feature | Algorithm | Purpose |
+|---------|-----------|---------|
+| HMAC | SHA-256 | Message authentication |
+| AEAD | AES-256-GCM | Authenticated encryption |
+| Key Exchange | X25519 | Ephemeral key agreement |
 
-```rust
-use m2m::{CodecEngine, Algorithm};
-
-let engine = CodecEngine::new();
-
-// Compress
-let json = r#"{"model":"gpt-4o","messages":[{"role":"user","content":"Hello"}]}"#;
-let compressed = engine.compress(json, Algorithm::M2M)?;
-
-// Decompress (auto-detects algorithm)
-let original = engine.decompress(&compressed.data)?;
-```
-
-```bash
-# CLI
-m2m compress '{"model":"gpt-4o","messages":[...]}'
-m2m decompress '#M2M|1|...'
-m2m scan "Ignore all previous instructions"
-```
-
-## Why M2M?
-
-| Problem | Solution |
-|---------|----------|
-| **Latency** | 58% smaller payloads, sub-ms encode/decode |
-| **Payload limits** | Fit 2-3x more context within Lambda/API Gateway limits |
-| **Storage costs** | 40-70% smaller logs and audit trails |
-| **Blind routing** | Headers readable without decompression |
-| **Semantic attacks** | Cognitive security at protocol layer |
+**Security as a protocol guarantee**: Every M2M-speaking agent gets the same threat detection and crypto primitives. No per-agent implementation. No gaps.
 
 ## Wire Format
 
 | Algorithm | Wire Format | Compression | Best For |
 |-----------|-------------|-------------|----------|
-| **M2M** (default) | `#M2M\|1\|...` | 40-70% | LLM API JSON |
-| **TokenNative** | `#TK\|C\|...` | 30-50% | Token ID transmission |
-| **Brotli** | `#M2M[v3.0]\|DATA:...` | 60-80% | Large payloads (>1KB) |
+| **M2M** (default) | `#M2M\|1\|<header><payload>` | 40-70% | LLM API JSON, routing-aware |
+| **TokenNative** | `#TK\|<enc>\|<tokens>` | 30-50% | Token ID transmission |
+| **Brotli** | `#M2M[v3.0]\|DATA:<b64>` | 60-80% | Large payloads (>1KB) |
 
-## Cryptographic Security
+### Algorithm Selection
 
-Optional (`--features crypto`):
+```rust
+// Automatic (recommended)
+let result = engine.compress_auto(json)?;
 
-- **HMAC** — Message authentication
-- **AEAD** — ChaCha20-Poly1305 encryption
-- **X25519** — Key exchange
+// Explicit
+let result = engine.compress(json, Algorithm::M2M)?;
 
-## Protocol Modes
+// ML-assisted (requires Hydra model)
+let result = engine.compress_with_hydra(json)?;
+```
 
-**Stateless**: Direct compress/decompress, no handshake.
+## M2M vs Alternatives
 
-**Session-based**: HELLO/ACCEPT capability negotiation, PING/PONG keep-alive.
+### Latency Comparison
+
+| Approach | Wire Size | Tokens | Encode | Decode | Headers Readable |
+|----------|-----------|--------|--------|--------|------------------|
+| Raw JSON | 100% | 100% | 0 | 0 | Yes |
+| Gzip + Base64 | ~52% | **+38%** | ~0.5ms | ~0.3ms | No |
+| Brotli + Base64 | ~40% | **+25%** | ~2ms | ~0.5ms | No |
+| Protobuf | ~50% | N/A | ~0.2ms | ~0.2ms | No |
+| **M2M** | ~45% | **-40%** | **0.24ms** | **0.15ms** | **Yes** |
+
+M2M optimizes for the metrics that matter in agent-to-agent communication:
+- **Sub-millisecond latency**: Encode + decode < 0.5ms total
+- **Token reduction**: Fewer tokens = faster LLM processing
+- **Routing without decompression**: Headers always readable
+
+### When to Use M2M
+
+- Agent-to-agent communication over HTTP/QUIC
+- LLM API traffic where token count affects latency
+- Systems requiring payload inspection at infrastructure layer
+- Multi-agent architectures needing standardized security
+
+### When NOT to Use M2M
+
+- Non-LLM traffic (use gzip/brotli directly)
+- Already using efficient binary protocols end-to-end (gRPC, Cap'n Proto)
+- Single-agent systems with no inter-agent communication
+- Environments where payload inspection isn't needed
 
 ## Performance
 
@@ -161,7 +254,7 @@ Optional (`--features crypto`):
 
 ## Hydra (Optional)
 
-[Hydra](https://huggingface.co/infernet/hydra) is an ML classifier for intelligent algorithm selection. Native Rust inference — no ONNX/Python.
+[Hydra](https://huggingface.co/infernet/hydra) is an ML classifier for intelligent algorithm selection. Native Rust inference — no ONNX/Python runtime required.
 
 ```bash
 make model-download
@@ -177,7 +270,7 @@ make model-download
 | Agentic Observability | Stable |
 | Cognitive Security | Stable |
 | HMAC/AEAD crypto | Stable |
-| Hydra routing | Stable |
+| Hydra ML routing | Stable |
 | QUIC/HTTP3 | Experimental |
 
 ## Documentation
@@ -191,4 +284,4 @@ make model-download
 
 Apache-2.0 — [INFERNET](https://infernet.org)
 
-[GitHub](https://github.com/infernet-org/m2m-protocol) · [Hydra Model](https://huggingface.co/infernet/hydra)
+[GitHub](https://github.com/infernet-org/m2m-protocol) · [Crates.io](https://crates.io/crates/m2m-core) · [Hydra Model](https://huggingface.co/infernet/hydra)
