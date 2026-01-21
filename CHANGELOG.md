@@ -5,6 +5,35 @@ All notable changes to M2M Protocol will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Unified `CryptoError` type** for error chain preservation
+  - Aggregates all crypto errors (`AeadError`, `HmacError`, `KeyringError`, etc.)
+  - Preserves error source chain via `#[source]` attribute
+  - Enables debugging tools to display complete error context
+- **`M2MError::Crypto` variant** for proper crypto error propagation
+  - Crypto errors no longer wrapped as generic `Compression`/`Decompression` strings
+  - Full error chain preserved through `std::error::Error::source()`
+- **`KeyPair::generate_with_rng()`** for deterministic key generation in tests
+  - Accepts any `CryptoRng + RngCore` implementation
+  - Enables reproducible test cases with seeded RNGs
+
+### Changed
+
+- Crypto errors in `frame.rs` now use `M2MError::Crypto(e.into())` pattern
+  - HMAC init/verify errors preserve `HmacError` source
+  - AEAD init/encrypt/decrypt errors preserve `AeadError` source
+  - Nonce generation errors preserve `NonceError` source
+
+### Epistemic Notes
+
+Error handling now follows epistemic principles:
+- **B_i falsified**: Most errors indicate a runtime belief was proven wrong
+- **I^B handling**: Bounded ignorance errors (RNG, network) return `Result`
+- **Error chains**: `#[source]` enables tracing errors to root cause
+
 ## [0.4.0] - 2026-01-19
 
 ### Added

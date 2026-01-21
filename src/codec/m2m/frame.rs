@@ -266,8 +266,8 @@ impl M2MFrame {
         }
 
         // Compute HMAC over the entire frame (excluding prefix for efficiency)
-        let hmac_auth = HmacAuth::new(security_ctx.key().clone())
-            .map_err(|e| M2MError::Compression(format!("HMAC init failed: {}", e)))?;
+        let hmac_auth =
+            HmacAuth::new(security_ctx.key().clone()).map_err(|e| M2MError::Crypto(e.into()))?;
 
         let data_to_sign = &frame_bytes[M2M_PREFIX.len()..];
         let tag = hmac_auth.compute_tag(data_to_sign);
@@ -328,7 +328,7 @@ impl M2MFrame {
         #[cfg(feature = "crypto")]
         let nonce = security_ctx
             .next_nonce()
-            .map_err(|e| M2MError::Compression(format!("Nonce generation failed: {}", e)))?;
+            .map_err(|e| M2MError::Crypto(e.into()))?;
         #[cfg(not(feature = "crypto"))]
         let nonce = {
             // Fallback for non-crypto builds (NOT SECURE - testing only)
@@ -342,15 +342,15 @@ impl M2MFrame {
             );
             n
         };
-        let cipher = AeadCipher::new(security_ctx.key().clone())
-            .map_err(|e| M2MError::Compression(format!("AEAD init failed: {}", e)))?;
+        let cipher =
+            AeadCipher::new(security_ctx.key().clone()).map_err(|e| M2MError::Crypto(e.into()))?;
 
         // Associated data = headers (authenticated but not encrypted)
         let aad = &buf[M2M_PREFIX.len()..header_end];
 
         let ciphertext = cipher
             .encrypt(&plaintext, &nonce, aad)
-            .map_err(|e| M2MError::Compression(format!("AEAD encrypt failed: {}", e)))?;
+            .map_err(|e| M2MError::Crypto(e.into()))?;
 
         // Append ciphertext (includes nonce at start and tag at end)
         buf.extend_from_slice(&ciphertext);
@@ -537,13 +537,13 @@ impl M2MFrame {
         let provided_tag = &data[frame_end..];
 
         // Verify HMAC over frame (excluding prefix for consistency with encode)
-        let hmac_auth = HmacAuth::new(security_ctx.key().clone())
-            .map_err(|e| M2MError::Decompression(format!("HMAC init failed: {}", e)))?;
+        let hmac_auth =
+            HmacAuth::new(security_ctx.key().clone()).map_err(|e| M2MError::Crypto(e.into()))?;
 
         let data_to_verify = &frame_data[M2M_PREFIX.len()..];
         hmac_auth
             .verify_tag(data_to_verify, provided_tag)
-            .map_err(|_| M2MError::Decompression("HMAC verification failed".to_string()))?;
+            .map_err(|e| M2MError::Crypto(e.into()))?;
 
         // Decode the verified frame
         Self::decode(frame_data)
@@ -607,8 +607,8 @@ impl M2MFrame {
         }
 
         // Decrypt
-        let cipher = AeadCipher::new(security_ctx.key().clone())
-            .map_err(|e| M2MError::Decompression(format!("AEAD init failed: {}", e)))?;
+        let cipher =
+            AeadCipher::new(security_ctx.key().clone()).map_err(|e| M2MError::Crypto(e.into()))?;
 
         // Associated data = fixed header + variable header
         let header_end = M2M_PREFIX.len() + fixed.header_len as usize;
@@ -616,7 +616,7 @@ impl M2MFrame {
 
         let plaintext = cipher
             .decrypt(encrypted_data, aad)
-            .map_err(|e| M2MError::Decompression(format!("AEAD decrypt failed: {}", e)))?;
+            .map_err(|e| M2MError::Crypto(e.into()))?;
 
         // Parse decrypted payload: payload_len || crc32 || payload
         if plaintext.len() < 8 {

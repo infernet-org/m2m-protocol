@@ -68,13 +68,36 @@ pub struct KeyPair {
 }
 
 impl KeyPair {
-    /// Generate a new random key pair
+    /// Generate a new random key pair using the system CSPRNG.
+    ///
+    /// This is the recommended way to generate key pairs for production use.
     #[cfg(feature = "crypto")]
     pub fn generate() -> Self {
         use rand::rngs::OsRng;
+        Self::generate_with_rng(&mut OsRng)
+    }
+
+    /// Generate a new key pair with a custom RNG.
+    ///
+    /// This method allows injecting a custom RNG for testing purposes,
+    /// enabling deterministic key generation in tests while using
+    /// the system CSPRNG in production.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use rand::SeedableRng;
+    /// use rand_chacha::ChaCha20Rng;
+    ///
+    /// // Deterministic for testing
+    /// let mut rng = ChaCha20Rng::seed_from_u64(42);
+    /// let key_pair = KeyPair::generate_with_rng(&mut rng);
+    /// ```
+    #[cfg(feature = "crypto")]
+    pub fn generate_with_rng<R: rand::CryptoRng + rand::RngCore>(rng: &mut R) -> Self {
         use x25519_dalek::{PublicKey as X25519Public, StaticSecret};
 
-        let secret = StaticSecret::random_from_rng(OsRng);
+        let secret = StaticSecret::random_from_rng(rng);
         let public = X25519Public::from(&secret);
 
         Self {
@@ -335,5 +358,27 @@ mod tests {
 
         // Same secret should produce same public key
         assert_eq!(kp1.public_key().as_bytes(), kp2.public_key().as_bytes());
+    }
+
+    #[test]
+    #[cfg(feature = "crypto")]
+    fn test_generate_with_rng_deterministic() {
+        use rand::SeedableRng;
+        use rand_chacha::ChaCha20Rng;
+
+        // Same seed should produce same key pair
+        let mut rng1 = ChaCha20Rng::seed_from_u64(12345);
+        let mut rng2 = ChaCha20Rng::seed_from_u64(12345);
+
+        let kp1 = KeyPair::generate_with_rng(&mut rng1);
+        let kp2 = KeyPair::generate_with_rng(&mut rng2);
+
+        assert_eq!(kp1.public_key().as_bytes(), kp2.public_key().as_bytes());
+
+        // Different seed should produce different key pair
+        let mut rng3 = ChaCha20Rng::seed_from_u64(99999);
+        let kp3 = KeyPair::generate_with_rng(&mut rng3);
+
+        assert_ne!(kp1.public_key().as_bytes(), kp3.public_key().as_bytes());
     }
 }
