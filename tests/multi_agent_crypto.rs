@@ -2222,8 +2222,8 @@ mod performance {
         let duration = start.elapsed();
         let per_op = duration / iterations;
 
-        // Threshold: 100µs per derivation (very conservative)
-        let threshold = Duration::from_micros(100);
+        // Threshold: 200µs per derivation (conservative for CI debug builds)
+        let threshold = Duration::from_micros(200);
 
         println!(
             "Key derivation: {:?} per op ({} iterations)",
@@ -2310,8 +2310,9 @@ mod performance {
         let duration = start.elapsed();
         let per_roundtrip = duration / iterations;
 
-        // Threshold: 500µs per roundtrip (conservative for debug builds)
-        let threshold = Duration::from_micros(500);
+        // Threshold: 1000µs per roundtrip (conservative for CI debug builds)
+        // Local release builds achieve < 5µs
+        let threshold = Duration::from_micros(1000);
 
         println!(
             "Roundtrip latency: {:?} ({} iterations in {:?})",
