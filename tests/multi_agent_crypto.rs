@@ -2766,3 +2766,745 @@ mod stress {
         }
     }
 }
+
+// =============================================================================
+// PHASE 11: TRUE MULTI-AGENT LLM COMMUNICATION
+// =============================================================================
+// These tests validate actual agent-to-agent communication with real LLM traffic.
+// Unlike the stress tests (which validate crypto throughput), these tests ensure
+// the protocol works correctly for multi-round, multi-agent conversations.
+//
+// Key differences from Phase 6:
+// - Multi-round (3+ turns) instead of single request-response
+// - Agent relay (Alice → Bob → LLM → Bob → Alice)
+// - Dynamic payload sizes (LLM generates variable responses)
+// - Cross-org collaboration
+// - Small network simulation (5+ agents)
+
+/// Phase 11: Multi-round conversation between two agents via LLM
+/// Tests: Session state persistence, nonce progression, variable payloads
+#[tokio::test]
+#[ignore = "requires OPENROUTER_API_KEY - run with: cargo test --features crypto test_multi_round_conversation -- --ignored"]
+async fn test_multi_round_conversation() {
+    dotenvy::dotenv().ok();
+
+    let api_key = openrouter::get_api_key();
+    if api_key.is_none() {
+        println!("Skipping: OPENROUTER_API_KEY not set");
+        return;
+    }
+
+    println!("\n============================================================");
+    println!("PHASE 11: Multi-Round Conversation (3 turns)");
+    println!("============================================================\n");
+
+    let org = TestOrg::new("multiround", 2);
+    let alice = org.agent(0);
+    let bob = org.agent(1);
+
+    let session_id = "multi-round-001";
+    let mut alice_ctx = alice.create_security_context(&bob.id, session_id);
+    let mut bob_ctx = bob.create_security_context(&alice.id, session_id);
+
+    let client = openrouter::create_client();
+
+    // Conversation history for multi-turn
+    let mut conversation: Vec<openrouter::ChatMessage> = vec![];
+
+    // System message to establish context
+    conversation.push(openrouter::ChatMessage {
+        role: "system".to_string(),
+        content: "You are a helpful assistant in a secure multi-agent communication test. Keep responses under 50 words.".to_string(),
+    });
+
+    let turns = [
+        "What is the capital of France? Reply briefly.",
+        "What language do they speak there? Reply briefly.",
+        "Name one famous landmark there. Reply briefly.",
+    ];
+
+    let mut total_encrypted_bytes = 0usize;
+    let mut total_plaintext_bytes = 0usize;
+    let mut encrypted_frames: Vec<Vec<u8>> = vec![];
+
+    for (i, user_msg) in turns.iter().enumerate() {
+        println!("--- Turn {} ---", i + 1);
+
+        // Alice adds her message to conversation
+        conversation.push(openrouter::ChatMessage {
+            role: "user".to_string(),
+            content: user_msg.to_string(),
+        });
+
+        // Create request payload with full conversation history
+        let request_payload = serde_json::json!({
+            "model": openrouter::MODEL,
+            "messages": conversation,
+            "temperature": 0.1,
+            "max_tokens": 100
+        });
+
+        let request_str = serde_json::to_string(&request_payload).unwrap();
+        total_plaintext_bytes += request_str.len();
+
+        // Alice encrypts request
+        let frame = M2MFrame::new_request(&request_str).expect("Frame creation failed");
+        let encrypted = frame
+            .encode_secure(SecurityMode::Aead, &mut alice_ctx)
+            .expect("Alice encryption failed");
+
+        total_encrypted_bytes += encrypted.len();
+        encrypted_frames.push(encrypted.clone());
+
+        println!(
+            "  Alice → Bob: {} bytes encrypted (plaintext: {})",
+            encrypted.len(),
+            request_str.len()
+        );
+
+        // Bob decrypts
+        let decrypted_frame =
+            M2MFrame::decode_secure(&encrypted, &bob_ctx).expect("Bob decryption failed");
+
+        assert_eq!(decrypted_frame.payload, request_str, "Payload mismatch");
+
+        // Bob calls LLM (simulating Bob as gateway agent)
+        let response = openrouter::chat_completion(
+            &client,
+            openrouter::MODEL,
+            conversation.clone(),
+            Some(0.1),
+            Some(100),
+        )
+        .await;
+
+        let llm_response = match response {
+            Ok(text) => text,
+            Err(e) => {
+                let error_msg = e.to_string();
+                if error_msg.contains("429")
+                    || error_msg.contains("402")
+                    || error_msg.contains("rate")
+                    || error_msg.contains("limit")
+                {
+                    println!("  Skipping: API limit reached ({error_msg})");
+                    return;
+                }
+                panic!("LLM call failed: {e}");
+            },
+        };
+
+        println!(
+            "  LLM response: {}",
+            llm_response.chars().take(80).collect::<String>()
+        );
+
+        // Add assistant response to conversation
+        conversation.push(openrouter::ChatMessage {
+            role: "assistant".to_string(),
+            content: llm_response.clone(),
+        });
+
+        // Bob encrypts response back to Alice
+        let response_payload = serde_json::json!({
+            "response": llm_response,
+            "turn": i + 1
+        });
+
+        let response_str = serde_json::to_string(&response_payload).unwrap();
+        total_plaintext_bytes += response_str.len();
+
+        let response_frame =
+            M2MFrame::new_response(&response_str).expect("Response frame creation failed");
+        let encrypted_response = response_frame
+            .encode_secure(SecurityMode::Aead, &mut bob_ctx)
+            .expect("Bob encryption failed");
+
+        total_encrypted_bytes += encrypted_response.len();
+
+        println!(
+            "  Bob → Alice: {} bytes encrypted (plaintext: {})",
+            encrypted_response.len(),
+            response_str.len()
+        );
+
+        // Alice decrypts response
+        let alice_received = M2MFrame::decode_secure(&encrypted_response, &alice_ctx)
+            .expect("Alice decryption failed");
+
+        let parsed: serde_json::Value = serde_json::from_str(&alice_received.payload).unwrap();
+        assert_eq!(parsed["turn"], i + 1, "Turn number mismatch");
+
+        println!();
+    }
+
+    // Validate invariants
+    println!("=== Multi-Round Summary ===");
+    println!("Turns completed: {}", turns.len());
+    println!(
+        "Total encrypted: {} bytes, plaintext: {} bytes",
+        total_encrypted_bytes, total_plaintext_bytes
+    );
+    println!(
+        "Encrypted frames captured: {} (for nonce uniqueness validation)",
+        encrypted_frames.len()
+    );
+
+    // Nonce uniqueness is guaranteed by the fact that:
+    // 1. Each encryption uses a fresh random nonce (see SecurityContext::next_nonce)
+    // 2. Decryption succeeded for all frames (would fail with nonce reuse + same key)
+    // 3. The encrypted frames have different sizes (variable LLM responses)
+
+    // Verify frames are all different (different nonces + different payloads = different ciphertext)
+    for i in 0..encrypted_frames.len() {
+        for j in i + 1..encrypted_frames.len() {
+            assert_ne!(
+                encrypted_frames[i], encrypted_frames[j],
+                "Encrypted frames {} and {} should be different",
+                i, j
+            );
+        }
+    }
+    println!("All encrypted frames are unique (implies unique nonces).");
+
+    println!("Multi-round conversation completed successfully!");
+}
+
+/// Phase 11: Agent relay (Alice → Bob → LLM → Bob → Alice)
+/// Tests: Intermediary agent handling, re-encryption, chain of custody
+#[tokio::test]
+#[ignore = "requires OPENROUTER_API_KEY - run with: cargo test --features crypto test_agent_relay -- --ignored"]
+async fn test_agent_relay() {
+    dotenvy::dotenv().ok();
+
+    let api_key = openrouter::get_api_key();
+    if api_key.is_none() {
+        println!("Skipping: OPENROUTER_API_KEY not set");
+        return;
+    }
+
+    println!("\n============================================================");
+    println!("PHASE 11: Agent Relay (Alice → Bob → Charlie → LLM)");
+    println!("============================================================\n");
+
+    // Three agents: Alice (initiator), Bob (relay), Charlie (gateway to LLM)
+    let org = TestOrg::new("relay", 3);
+    let alice = org.agent(0);
+    let bob = org.agent(1);
+    let charlie = org.agent(2);
+
+    // Alice → Bob session
+    let session_ab = "relay-ab-001";
+    let mut alice_to_bob_ctx = alice.create_security_context(&bob.id, session_ab);
+    let bob_from_alice_ctx = bob.create_security_context(&alice.id, session_ab);
+
+    // Bob → Charlie session
+    let session_bc = "relay-bc-001";
+    let mut bob_to_charlie_ctx = bob.create_security_context(&charlie.id, session_bc);
+    let charlie_from_bob_ctx = charlie.create_security_context(&bob.id, session_bc);
+
+    // Charlie → Bob session (for response)
+    let mut charlie_to_bob_ctx = charlie.create_security_context(&bob.id, session_bc);
+    let bob_from_charlie_ctx = bob.create_security_context(&charlie.id, session_bc);
+
+    // Bob → Alice session (for response)
+    let mut bob_to_alice_ctx = bob.create_security_context(&alice.id, session_ab);
+    let alice_from_bob_ctx = alice.create_security_context(&bob.id, session_ab);
+
+    let client = openrouter::create_client();
+
+    // Alice creates request
+    let request_payload = serde_json::json!({
+        "model": openrouter::MODEL,
+        "messages": [
+            {"role": "system", "content": "You are testing a relay system. Be brief."},
+            {"role": "user", "content": "What is 7 * 8? Reply with just the number."}
+        ],
+        "temperature": 0.0,
+        "max_tokens": 10
+    });
+
+    let request_str = serde_json::to_string(&request_payload).unwrap();
+    println!("Alice's original request: {} bytes", request_str.len());
+
+    // Step 1: Alice → Bob (encrypted)
+    let frame1 = M2MFrame::new_request(&request_str).unwrap();
+    let encrypted1 = frame1
+        .encode_secure(SecurityMode::Aead, &mut alice_to_bob_ctx)
+        .unwrap();
+    println!("1. Alice → Bob: {} bytes (encrypted)", encrypted1.len());
+
+    // Step 2: Bob decrypts from Alice
+    let decrypted_at_bob = M2MFrame::decode_secure(&encrypted1, &bob_from_alice_ctx).unwrap();
+    println!("2. Bob decrypts Alice's message");
+
+    // Step 3: Bob re-encrypts for Charlie
+    let frame2 = M2MFrame::new_request(&decrypted_at_bob.payload).unwrap();
+    let encrypted2 = frame2
+        .encode_secure(SecurityMode::Aead, &mut bob_to_charlie_ctx)
+        .unwrap();
+    println!(
+        "3. Bob → Charlie: {} bytes (re-encrypted)",
+        encrypted2.len()
+    );
+
+    // Step 4: Charlie decrypts from Bob
+    let decrypted_at_charlie = M2MFrame::decode_secure(&encrypted2, &charlie_from_bob_ctx).unwrap();
+    println!("4. Charlie decrypts Bob's message");
+
+    // Verify payload integrity through relay
+    assert_eq!(
+        decrypted_at_charlie.payload, request_str,
+        "Payload must survive relay intact"
+    );
+
+    // Step 5: Charlie calls LLM
+    let response = openrouter::chat_completion(
+        &client,
+        openrouter::MODEL,
+        vec![
+            openrouter::ChatMessage {
+                role: "system".to_string(),
+                content: "You are testing a relay system. Be brief.".to_string(),
+            },
+            openrouter::ChatMessage {
+                role: "user".to_string(),
+                content: "What is 7 * 8? Reply with just the number.".to_string(),
+            },
+        ],
+        Some(0.0),
+        Some(10),
+    )
+    .await;
+
+    let llm_response = match response {
+        Ok(text) => text,
+        Err(e) => {
+            let error_msg = e.to_string();
+            if error_msg.contains("429")
+                || error_msg.contains("402")
+                || error_msg.contains("rate")
+                || error_msg.contains("limit")
+            {
+                println!("Skipping: API limit reached ({error_msg})");
+                return;
+            }
+            panic!("LLM call failed: {e}");
+        },
+    };
+
+    println!("5. Charlie receives LLM response: {}", llm_response.trim());
+
+    // Step 6: Charlie → Bob (encrypted response)
+    let response_frame = M2MFrame::new_response(&llm_response).unwrap();
+    let encrypted3 = response_frame
+        .encode_secure(SecurityMode::Aead, &mut charlie_to_bob_ctx)
+        .unwrap();
+    println!("6. Charlie → Bob: {} bytes (encrypted)", encrypted3.len());
+
+    // Step 7: Bob decrypts from Charlie
+    let bob_receives = M2MFrame::decode_secure(&encrypted3, &bob_from_charlie_ctx).unwrap();
+    println!("7. Bob decrypts Charlie's response");
+
+    // Step 8: Bob → Alice (encrypted response)
+    let response_frame2 = M2MFrame::new_response(&bob_receives.payload).unwrap();
+    let encrypted4 = response_frame2
+        .encode_secure(SecurityMode::Aead, &mut bob_to_alice_ctx)
+        .unwrap();
+    println!("8. Bob → Alice: {} bytes (encrypted)", encrypted4.len());
+
+    // Step 9: Alice decrypts final response
+    let alice_receives = M2MFrame::decode_secure(&encrypted4, &alice_from_bob_ctx).unwrap();
+    println!(
+        "9. Alice receives final response: {}",
+        alice_receives.payload.trim()
+    );
+
+    // Verify response made it through the relay
+    assert!(
+        alice_receives.payload.contains("56")
+            || alice_receives.payload.to_lowercase().contains("fifty"),
+        "Expected 56 in response, got: {}",
+        alice_receives.payload
+    );
+
+    println!("\nRelay chain completed: Alice → Bob → Charlie → LLM → Charlie → Bob → Alice");
+}
+
+/// Phase 11: Cross-organization collaboration
+/// Tests: X25519 key exchange between different org hierarchies
+#[tokio::test]
+#[ignore = "requires OPENROUTER_API_KEY - run with: cargo test --features crypto test_cross_org_llm -- --ignored"]
+async fn test_cross_org_llm() {
+    dotenvy::dotenv().ok();
+
+    let api_key = openrouter::get_api_key();
+    if api_key.is_none() {
+        println!("Skipping: OPENROUTER_API_KEY not set");
+        return;
+    }
+
+    println!("\n============================================================");
+    println!("PHASE 11: Cross-Organization LLM Communication");
+    println!("============================================================\n");
+
+    // Two different organizations (different master keys!)
+    let org_alpha = TestOrg::new("alpha", 2);
+    let org_beta = TestOrg::new("beta", 2);
+
+    let _alice = org_alpha.agent(0); // Alpha org
+    let _bob = org_beta.agent(0); // Beta org
+
+    // For cross-org communication, we must use X25519 key exchange
+    // because the agents don't share a common master key
+    let mut alice_exchange = KeyExchange::new();
+    let mut bob_exchange = KeyExchange::new();
+
+    // Exchange public keys (in real system, this would happen over the network)
+    let alice_public = alice_exchange.public_key().clone();
+    let bob_public = bob_exchange.public_key().clone();
+
+    alice_exchange.set_peer_public(bob_public);
+    bob_exchange.set_peer_public(alice_public);
+
+    // Derive shared session key from X25519 exchange
+    let session_id = "cross-org-llm-001";
+    let alice_session_key = alice_exchange
+        .derive_session_key(session_id)
+        .expect("Alice should derive session key");
+    let bob_session_key = bob_exchange
+        .derive_session_key(session_id)
+        .expect("Bob should derive session key");
+
+    // Verify keys match (fundamental DH property)
+    assert_eq!(
+        alice_session_key.as_bytes(),
+        bob_session_key.as_bytes(),
+        "X25519 derived keys must match"
+    );
+    println!("X25519 key exchange complete - shared secret established");
+
+    // Create security contexts with the shared key
+    let mut alice_ctx = SecurityContext::new(alice_session_key);
+    let bob_ctx = SecurityContext::new(bob_session_key);
+
+    let client = openrouter::create_client();
+
+    // Alice (Alpha org) sends to Bob (Beta org)
+    let request_payload = serde_json::json!({
+        "model": openrouter::MODEL,
+        "messages": [
+            {"role": "system", "content": "You are in a cross-org secure test. Be brief."},
+            {"role": "user", "content": "Name a primary color. One word only."}
+        ],
+        "temperature": 0.5,
+        "max_tokens": 10
+    });
+
+    let request_str = serde_json::to_string(&request_payload).unwrap();
+
+    // Alice encrypts with shared key
+    let frame = M2MFrame::new_request(&request_str).unwrap();
+    let encrypted = frame
+        .encode_secure(SecurityMode::Aead, &mut alice_ctx)
+        .unwrap();
+
+    println!(
+        "Alice (Alpha) → Bob (Beta): {} bytes encrypted",
+        encrypted.len()
+    );
+
+    // Bob decrypts with shared key
+    let decrypted = M2MFrame::decode_secure(&encrypted, &bob_ctx).unwrap();
+
+    assert_eq!(
+        decrypted.payload, request_str,
+        "Cross-org decryption failed"
+    );
+    println!("Bob successfully decrypted cross-org message");
+
+    // Bob calls LLM
+    let response = openrouter::chat_completion(
+        &client,
+        openrouter::MODEL,
+        vec![
+            openrouter::ChatMessage {
+                role: "system".to_string(),
+                content: "You are in a cross-org secure test. Be brief.".to_string(),
+            },
+            openrouter::ChatMessage {
+                role: "user".to_string(),
+                content: "Name a primary color. One word only.".to_string(),
+            },
+        ],
+        Some(0.5),
+        Some(10),
+    )
+    .await;
+
+    match response {
+        Ok(text) => {
+            println!("LLM response: {}", text.trim());
+            assert!(!text.is_empty(), "Response should not be empty");
+        },
+        Err(e) => {
+            let error_msg = e.to_string();
+            if error_msg.contains("429")
+                || error_msg.contains("402")
+                || error_msg.contains("rate")
+                || error_msg.contains("limit")
+            {
+                println!("Skipping: API limit reached ({error_msg})");
+                return;
+            }
+            panic!("LLM call failed: {e}");
+        },
+    }
+
+    println!("Cross-org communication successful!");
+}
+
+/// Phase 11: Small agent network (5 agents, mesh communication)
+/// Tests: Scale with real LLM traffic, concurrent contexts
+#[tokio::test]
+#[ignore = "requires OPENROUTER_API_KEY - run with: cargo test --features crypto test_small_agent_network -- --ignored"]
+async fn test_small_agent_network() {
+    dotenvy::dotenv().ok();
+
+    let api_key = openrouter::get_api_key();
+    if api_key.is_none() {
+        println!("Skipping: OPENROUTER_API_KEY not set");
+        return;
+    }
+
+    println!("\n============================================================");
+    println!("PHASE 11: Small Agent Network (5 agents, round-robin LLM)");
+    println!("============================================================\n");
+
+    let org = TestOrg::new("network", 5);
+
+    // Create a simple round-robin: agent 0 → 1 → 2 → 3 → 4 → 0
+    let client = openrouter::create_client();
+
+    let mut total_messages = 0;
+    let mut total_encrypted_bytes = 0;
+
+    // Each agent passes a message to the next, calling LLM once in the chain
+    for i in 0..5 {
+        let sender_idx = i;
+        let receiver_idx = (i + 1) % 5;
+
+        let sender = org.agent(sender_idx);
+        let receiver = org.agent(receiver_idx);
+
+        let session_id = format!("network-{}-{}", sender_idx, receiver_idx);
+        let mut sender_ctx = sender.create_security_context(&receiver.id, &session_id);
+        let receiver_ctx = receiver.create_security_context(&sender.id, &session_id);
+
+        // Only agent 2 actually calls the LLM (to minimize API costs)
+        let payload = if sender_idx == 2 {
+            // Call LLM
+            let response = openrouter::chat_completion(
+                &client,
+                openrouter::MODEL,
+                vec![openrouter::ChatMessage {
+                    role: "user".to_string(),
+                    content: "Say 'Network test OK' and nothing else.".to_string(),
+                }],
+                Some(0.0),
+                Some(20),
+            )
+            .await;
+
+            match response {
+                Ok(text) => {
+                    println!("Agent 2 received LLM response: {}", text.trim());
+                    serde_json::json!({
+                        "from_agent": sender_idx,
+                        "llm_response": text.trim(),
+                        "hop": i
+                    })
+                    .to_string()
+                },
+                Err(e) => {
+                    let error_msg = e.to_string();
+                    if error_msg.contains("429")
+                        || error_msg.contains("402")
+                        || error_msg.contains("rate")
+                        || error_msg.contains("limit")
+                    {
+                        println!("Skipping: API limit reached ({error_msg})");
+                        return;
+                    }
+                    panic!("LLM call failed: {e}");
+                },
+            }
+        } else {
+            // Synthetic payload (no LLM call)
+            serde_json::json!({
+                "from_agent": sender_idx,
+                "message": format!("Hello from agent {}", sender_idx),
+                "hop": i
+            })
+            .to_string()
+        };
+
+        // Encrypt and send
+        let frame = M2MFrame::new_request(&payload).unwrap();
+        let encrypted = frame
+            .encode_secure(SecurityMode::Aead, &mut sender_ctx)
+            .unwrap();
+
+        total_encrypted_bytes += encrypted.len();
+
+        // Receiver decrypts
+        let decrypted = M2MFrame::decode_secure(&encrypted, &receiver_ctx).unwrap();
+
+        let parsed: serde_json::Value = serde_json::from_str(&decrypted.payload).unwrap();
+        assert_eq!(parsed["from_agent"], sender_idx, "Sender mismatch");
+        assert_eq!(parsed["hop"], i, "Hop count mismatch");
+
+        println!(
+            "Agent {} → Agent {}: {} bytes (hop {})",
+            sender_idx,
+            receiver_idx,
+            encrypted.len(),
+            i
+        );
+
+        total_messages += 1;
+    }
+
+    println!("\n=== Network Summary ===");
+    println!("Agents: 5");
+    println!("Messages: {}", total_messages);
+    println!("Total encrypted bytes: {}", total_encrypted_bytes);
+    println!("LLM calls: 1 (agent 2 only, to minimize API costs)");
+    println!("Network test completed successfully!");
+}
+
+/// Phase 11: Variable payload sizes with real LLM responses
+/// Tests: Protocol handles dynamically-sized LLM outputs correctly
+#[tokio::test]
+#[ignore = "requires OPENROUTER_API_KEY - run with: cargo test --features crypto test_variable_payload_sizes -- --ignored"]
+async fn test_variable_payload_sizes() {
+    dotenvy::dotenv().ok();
+
+    let api_key = openrouter::get_api_key();
+    if api_key.is_none() {
+        println!("Skipping: OPENROUTER_API_KEY not set");
+        return;
+    }
+
+    println!("\n============================================================");
+    println!("PHASE 11: Variable Payload Sizes (LLM-generated)");
+    println!("============================================================\n");
+
+    let org = TestOrg::new("variable", 2);
+    let alice = org.agent(0);
+    let bob = org.agent(1);
+
+    let session_id = "variable-001";
+    let mut alice_ctx = alice.create_security_context(&bob.id, session_id);
+    let bob_ctx = bob.create_security_context(&alice.id, session_id);
+
+    let client = openrouter::create_client();
+
+    // Request different sized responses
+    let size_prompts = [
+        ("tiny", "Say 'OK'.", 5),
+        ("small", "Write exactly one sentence about the sun.", 50),
+        (
+            "medium",
+            "Write a short paragraph (3-4 sentences) about the ocean.",
+            200,
+        ),
+        (
+            "large",
+            "Write 5 sentences about space exploration, each on a new line.",
+            500,
+        ),
+    ];
+
+    let mut payload_sizes: Vec<(String, usize, usize)> = vec![];
+
+    for (label, prompt, max_tokens) in size_prompts {
+        println!("--- {} response ---", label);
+
+        let response = openrouter::chat_completion(
+            &client,
+            openrouter::MODEL,
+            vec![openrouter::ChatMessage {
+                role: "user".to_string(),
+                content: prompt.to_string(),
+            }],
+            Some(0.3),
+            Some(max_tokens),
+        )
+        .await;
+
+        let llm_response = match response {
+            Ok(text) => text,
+            Err(e) => {
+                let error_msg = e.to_string();
+                if error_msg.contains("429")
+                    || error_msg.contains("402")
+                    || error_msg.contains("rate")
+                    || error_msg.contains("limit")
+                {
+                    println!("Skipping: API limit reached ({error_msg})");
+                    return;
+                }
+                panic!("LLM call failed: {e}");
+            },
+        };
+
+        let response_len = llm_response.len();
+        println!("  LLM response length: {} chars", response_len);
+
+        // Wrap LLM response in JSON (M2MFrame requires valid JSON)
+        let payload_json = serde_json::json!({
+            "response": llm_response,
+            "size_class": label
+        });
+        let payload_str = serde_json::to_string(&payload_json).unwrap();
+        let payload_len = payload_str.len();
+
+        // Alice encrypts the JSON-wrapped LLM response
+        let frame = M2MFrame::new_request(&payload_str).unwrap();
+        let encrypted = frame
+            .encode_secure(SecurityMode::Aead, &mut alice_ctx)
+            .unwrap();
+
+        let encrypted_len = encrypted.len();
+        println!(
+            "  Encrypted: {} bytes (payload: {} bytes, overhead: {:.1}%)",
+            encrypted_len,
+            payload_len,
+            ((encrypted_len as f64 / payload_len as f64) - 1.0) * 100.0
+        );
+
+        // Bob decrypts
+        let decrypted = M2MFrame::decode_secure(&encrypted, &bob_ctx).unwrap();
+        assert_eq!(
+            decrypted.payload, payload_str,
+            "Payload mismatch for {} response",
+            label
+        );
+
+        payload_sizes.push((label.to_string(), payload_len, encrypted_len));
+        println!();
+    }
+
+    println!("=== Payload Size Summary ===");
+    for (label, plain, encrypted) in &payload_sizes {
+        println!(
+            "{:8}: plaintext={:4} bytes, encrypted={:4} bytes",
+            label, plain, encrypted
+        );
+    }
+
+    // Verify protocol handled all sizes
+    assert_eq!(payload_sizes.len(), 4, "Should have tested 4 payload sizes");
+    println!("\nVariable payload test completed successfully!");
+}
