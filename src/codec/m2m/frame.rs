@@ -389,8 +389,15 @@ impl M2MFrame {
         let fixed = FixedHeader::from_bytes(&data[pos..pos + FIXED_HEADER_SIZE])?;
         pos += FIXED_HEADER_SIZE;
 
-        // Calculate variable header size
-        let variable_header_size = fixed.header_len as usize - FIXED_HEADER_SIZE;
+        // Calculate variable header size (with underflow protection)
+        let header_len = fixed.header_len as usize;
+        if header_len < FIXED_HEADER_SIZE {
+            return Err(M2MError::Decompression(format!(
+                "Invalid header_len: {} < minimum {}",
+                header_len, FIXED_HEADER_SIZE
+            )));
+        }
+        let variable_header_size = header_len - FIXED_HEADER_SIZE;
 
         if pos + variable_header_size > data.len() {
             return Err(M2MError::Decompression(
@@ -569,8 +576,15 @@ impl M2MFrame {
         let fixed = FixedHeader::from_bytes(&data[pos..pos + FIXED_HEADER_SIZE])?;
         pos += FIXED_HEADER_SIZE;
 
-        // Calculate variable header size
-        let variable_header_size = fixed.header_len as usize - FIXED_HEADER_SIZE;
+        // Calculate variable header size (with underflow protection)
+        let header_len = fixed.header_len as usize;
+        if header_len < FIXED_HEADER_SIZE {
+            return Err(M2MError::Decompression(format!(
+                "Invalid header_len: {} < minimum {}",
+                header_len, FIXED_HEADER_SIZE
+            )));
+        }
+        let variable_header_size = header_len - FIXED_HEADER_SIZE;
 
         if pos + variable_header_size > data.len() {
             return Err(M2MError::Decompression(

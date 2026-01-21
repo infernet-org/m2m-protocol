@@ -841,7 +841,8 @@ mod openrouter {
     use std::time::Duration;
 
     pub const API_URL: &str = "https://openrouter.ai/api/v1/chat/completions";
-    pub const FREE_MODEL: &str = "meta-llama/llama-3.2-3b-instruct:free";
+    /// Cheap paid model (~$0.02/M input, $0.05/M output) - more reliable than free tier
+    pub const MODEL: &str = "meta-llama/llama-3.2-3b-instruct";
 
     /// Get API key from environment
     pub fn get_api_key() -> Option<String> {
@@ -944,14 +945,9 @@ async fn test_single_agent_llm_call() {
         content: "Say 'Hello from M2M test' and nothing else.".to_string(),
     }];
 
-    let response = openrouter::chat_completion(
-        &client,
-        openrouter::FREE_MODEL,
-        messages,
-        Some(0.1),
-        Some(50),
-    )
-    .await;
+    let response =
+        openrouter::chat_completion(&client, openrouter::MODEL, messages, Some(0.1), Some(50))
+            .await;
 
     match response {
         Ok(text) => {
@@ -1002,7 +998,7 @@ async fn test_two_agent_encrypted_conversation() {
 
     // Create encrypted request payload
     let request_payload = serde_json::json!({
-        "model": openrouter::FREE_MODEL,
+        "model": openrouter::MODEL,
         "messages": [
             {"role": "user", "content": alice_question}
         ],
@@ -1042,7 +1038,7 @@ async fn test_two_agent_encrypted_conversation() {
 
     let llm_response = match openrouter::chat_completion(
         &client,
-        openrouter::FREE_MODEL,
+        openrouter::MODEL,
         messages,
         Some(0.1),
         Some(10),
@@ -1121,7 +1117,7 @@ async fn test_cross_org_autonomous_chat() {
     let question = "Name one planet in our solar system. Reply with just the name.";
 
     let request_payload = serde_json::json!({
-        "model": openrouter::FREE_MODEL,
+        "model": openrouter::MODEL,
         "messages": [{"role": "user", "content": question}],
         "temperature": 0.1,
         "max_tokens": 20
@@ -1150,7 +1146,7 @@ async fn test_cross_org_autonomous_chat() {
 
     let response = match openrouter::chat_completion(
         &client,
-        openrouter::FREE_MODEL,
+        openrouter::MODEL,
         messages,
         Some(0.1),
         Some(20),
@@ -1643,4 +1639,751 @@ fn test_full_mesh_with_metrics() {
     );
     println!();
     println!("✅ All {} communication pairs successful", successful_pairs);
+}
+
+// =============================================================================
+// PHASE 8: PROTOCOL INVARIANTS & PROPERTY-BASED TESTING
+// =============================================================================
+
+/// Property-based tests using proptest
+mod invariants {
+    use super::*;
+    use proptest::prelude::*;
+    use std::collections::HashSet;
+
+    // =========================================================================
+    // COMPRESSION INVARIANTS
+    // =========================================================================
+
+    proptest! {
+        /// INV-C1: decode(encode(json)) == json for all valid LLM request JSON
+        #[test]
+        fn inv_c1_compression_roundtrip_request(
+            model in "[a-z]{3,10}(-[a-z0-9]+)?",
+            content in "[a-zA-Z0-9 .,!?]{1,500}",
+            temperature in 0.0f64..2.0f64,
+        ) {
+            let json = format!(
+                r#"{{"model":"{}","messages":[{{"role":"user","content":"{}"}}],"temperature":{:.2}}}"#,
+                model, content, temperature
+            );
+
+            let frame = M2MFrame::new_request(&json).unwrap();
+            let encoded = frame.encode().unwrap();
+            let decoded = M2MFrame::decode(&encoded).unwrap();
+
+            prop_assert_eq!(decoded.payload, json, "Compression roundtrip must preserve payload exactly");
+        }
+
+        /// INV-C2: Compression provides benefit for payloads > threshold
+        #[test]
+        fn inv_c2_compression_beneficial_for_large_payloads(
+            repeat_count in 10usize..50usize,
+        ) {
+            // Create a large payload by repeating content
+            let content = "Hello world! This is a test message. ".repeat(repeat_count);
+            let json = format!(
+                r#"{{"model":"gpt-4o","messages":[{{"role":"user","content":"{}"}}]}}"#,
+                content
+            );
+
+            // Only test if payload is above compression threshold
+            if json.len() > 100 {
+                let frame = M2MFrame::new_request(&json).unwrap();
+                let encoded = frame.encode().unwrap();
+
+                // Compressed should be smaller than original JSON
+                prop_assert!(
+                    encoded.len() < json.len(),
+                    "Compressed size {} should be < original size {} for large payloads",
+                    encoded.len(),
+                    json.len()
+                );
+            }
+        }
+
+        /// INV-C3: encode() is deterministic (same input → same output)
+        #[test]
+        fn inv_c3_compression_deterministic(
+            content in "[a-zA-Z0-9 ]{10,200}",
+        ) {
+            let json = format!(
+                r#"{{"model":"gpt-4o","messages":[{{"role":"user","content":"{}"}}]}}"#,
+                content
+            );
+
+            let frame1 = M2MFrame::new_request(&json).unwrap();
+            let frame2 = M2MFrame::new_request(&json).unwrap();
+
+            let encoded1 = frame1.encode().unwrap();
+            let encoded2 = frame2.encode().unwrap();
+
+            prop_assert_eq!(encoded1, encoded2, "Encoding must be deterministic");
+        }
+    }
+
+    /// INV-C4: decode() rejects malformed wire format
+    #[test]
+    fn inv_c4_malformed_frame_rejection() {
+        // Empty input
+        assert!(M2MFrame::decode(&[]).is_err());
+
+        // Wrong prefix
+        assert!(M2MFrame::decode(b"#INVALID|1|data").is_err());
+
+        // Truncated header
+        assert!(M2MFrame::decode(b"#M2M|1|").is_err());
+
+        // Truncated after prefix
+        assert!(M2MFrame::decode(b"#M2M|1|short").is_err());
+
+        // Random garbage
+        assert!(M2MFrame::decode(&[0xFF; 100]).is_err());
+
+        // Valid prefix but corrupted data
+        let mut corrupted = b"#M2M|1|".to_vec();
+        corrupted.extend_from_slice(&[0u8; 50]);
+        assert!(M2MFrame::decode(&corrupted).is_err());
+    }
+
+    // =========================================================================
+    // ENCRYPTION INVARIANTS
+    // =========================================================================
+
+    proptest! {
+        /// INV-E1: decrypt(encrypt(m, k), k) == m
+        #[test]
+        fn inv_e1_encryption_roundtrip(
+            content in "[a-zA-Z0-9 .,!?]{10,300}",
+        ) {
+            let json = format!(
+                r#"{{"model":"gpt-4o","messages":[{{"role":"user","content":"{}"}}]}}"#,
+                content
+            );
+
+            let org = TestOrg::new("alpha", 2);
+            let alice = org.agent(0);
+            let bob = org.agent(1);
+
+            let mut alice_ctx = alice.create_security_context(&bob.id, "inv-e1-test");
+            let bob_ctx = bob.create_security_context(&alice.id, "inv-e1-test");
+
+            let frame = M2MFrame::new_request(&json).unwrap();
+            let encrypted = frame.encode_secure(SecurityMode::Aead, &mut alice_ctx).unwrap();
+            let decrypted = M2MFrame::decode_secure(&encrypted, &bob_ctx).unwrap();
+
+            prop_assert_eq!(decrypted.payload, json);
+        }
+    }
+
+    /// INV-E2: decrypt(encrypt(m, k1), k2) fails when k1 ≠ k2
+    #[test]
+    fn inv_e2_wrong_key_fails() {
+        let org = TestOrg::new("alpha", 3);
+        let alice = org.agent(0);
+        let bob = org.agent(1);
+        let charlie = org.agent(2);
+
+        let payload = r#"{"model":"gpt-4o","messages":[{"role":"user","content":"Secret"}]}"#;
+        let frame = M2MFrame::new_request(payload).unwrap();
+
+        // Alice encrypts for Bob
+        let mut alice_ctx = alice.create_security_context(&bob.id, "inv-e2-test");
+        let encrypted = frame
+            .encode_secure(SecurityMode::Aead, &mut alice_ctx)
+            .unwrap();
+
+        // Charlie tries to decrypt (wrong key)
+        let charlie_ctx = charlie.create_security_context(&alice.id, "inv-e2-test");
+        let result = M2MFrame::decode_secure(&encrypted, &charlie_ctx);
+
+        assert!(result.is_err(), "Decryption with wrong key must fail");
+    }
+
+    /// INV-E3: decrypt(tamper(encrypt(m, k)), k) fails
+    #[test]
+    fn inv_e3_tamper_detection() {
+        let org = TestOrg::new("alpha", 2);
+        let alice = org.agent(0);
+        let bob = org.agent(1);
+
+        let payload = r#"{"model":"gpt-4o","messages":[{"role":"user","content":"Tamper test"}]}"#;
+        let frame = M2MFrame::new_request(payload).unwrap();
+
+        let mut alice_ctx = alice.create_security_context(&bob.id, "inv-e3-test");
+        let bob_ctx = bob.create_security_context(&alice.id, "inv-e3-test");
+
+        let encrypted = frame
+            .encode_secure(SecurityMode::Aead, &mut alice_ctx)
+            .unwrap();
+
+        // Tamper with various positions
+        for tamper_offset in [20, 50, encrypted.len() / 2, encrypted.len() - 10] {
+            if tamper_offset < encrypted.len() {
+                let mut tampered = encrypted.clone();
+                tampered[tamper_offset] ^= 0xFF;
+
+                let result = M2MFrame::decode_secure(&tampered, &bob_ctx);
+                assert!(
+                    result.is_err(),
+                    "Tampered ciphertext at offset {} must fail",
+                    tamper_offset
+                );
+            }
+        }
+    }
+
+    /// INV-E4: encrypt(m, k, n1) ≠ encrypt(m, k, n2) when n1 ≠ n2
+    #[test]
+    fn inv_e4_different_nonces_different_ciphertext() {
+        let org = TestOrg::new("alpha", 2);
+        let alice = org.agent(0);
+        let bob = org.agent(1);
+
+        let payload = r#"{"model":"gpt-4o","messages":[{"role":"user","content":"Same message"}]}"#;
+
+        let mut ciphertexts = Vec::new();
+
+        for i in 0..10 {
+            let mut alice_ctx = alice.create_security_context(&bob.id, &format!("inv-e4-{}", i));
+            let frame = M2MFrame::new_request(payload).unwrap();
+            let encrypted = frame
+                .encode_secure(SecurityMode::Aead, &mut alice_ctx)
+                .unwrap();
+            ciphertexts.push(encrypted);
+        }
+
+        // All ciphertexts should be unique
+        let unique: HashSet<Vec<u8>> = ciphertexts.iter().cloned().collect();
+        assert_eq!(
+            unique.len(),
+            10,
+            "Same plaintext must produce different ciphertexts with different nonces"
+        );
+    }
+
+    /// INV-E5: Nonces never repeat within a session
+    #[test]
+    fn inv_e5_nonce_uniqueness() {
+        let org = TestOrg::new("alpha", 2);
+        let alice = org.agent(0);
+        let bob = org.agent(1);
+
+        let mut alice_ctx = alice.create_security_context(&bob.id, "inv-e5-nonce-test");
+
+        let payload = r#"{"model":"gpt-4o","messages":[{"role":"user","content":"Test"}]}"#;
+
+        // Encrypt many messages with the same context
+        let mut nonces = HashSet::new();
+        let iterations = 1000;
+
+        for _ in 0..iterations {
+            let frame = M2MFrame::new_request(payload).unwrap();
+            let encrypted = frame
+                .encode_secure(SecurityMode::Aead, &mut alice_ctx)
+                .unwrap();
+
+            // Extract nonce (12 bytes after headers)
+            // Headers end at: prefix(7) + fixed_header(20) + variable_header
+            let header_len_offset = 7; // after prefix
+            let header_len = u16::from_le_bytes([
+                encrypted[header_len_offset],
+                encrypted[header_len_offset + 1],
+            ]) as usize;
+            let nonce_start = 7 + header_len;
+            let nonce = encrypted[nonce_start..nonce_start + 12].to_vec();
+
+            let is_new = nonces.insert(nonce);
+            assert!(is_new, "Nonce reuse detected!");
+        }
+
+        assert_eq!(
+            nonces.len(),
+            iterations,
+            "All {} nonces must be unique",
+            iterations
+        );
+    }
+
+    /// INV-E6: AAD modification causes auth failure
+    #[test]
+    fn inv_e6_aad_binding() {
+        let org = TestOrg::new("alpha", 2);
+        let alice = org.agent(0);
+        let bob = org.agent(1);
+
+        let payload = r#"{"model":"gpt-4o","messages":[{"role":"user","content":"AAD test"}]}"#;
+        let frame = M2MFrame::new_request(payload).unwrap();
+
+        let mut alice_ctx = alice.create_security_context(&bob.id, "inv-e6-test");
+        let bob_ctx = bob.create_security_context(&alice.id, "inv-e6-test");
+
+        let mut encrypted = frame
+            .encode_secure(SecurityMode::Aead, &mut alice_ctx)
+            .unwrap();
+
+        // Tamper with the header (AAD) - modify the schema byte
+        let schema_offset = 7 + 2; // prefix + header_len
+        encrypted[schema_offset] ^= 0x01;
+
+        let result = M2MFrame::decode_secure(&encrypted, &bob_ctx);
+        assert!(
+            result.is_err(),
+            "Modified AAD must cause authentication failure"
+        );
+    }
+
+    // =========================================================================
+    // KEY DERIVATION INVARIANTS
+    // =========================================================================
+
+    /// INV-K1: derive(A, B, sid) == derive(B, A, sid) [symmetry]
+    #[test]
+    fn inv_k1_session_key_symmetry() {
+        let org = TestOrg::new("alpha", 10);
+
+        for i in 0..10 {
+            for j in (i + 1)..10 {
+                let agent_i = org.agent(i);
+                let agent_j = org.agent(j);
+
+                for session_id in ["s1", "s2", "test-session", "abc123"] {
+                    let key_ij = agent_i.derive_session_key(&agent_j.id, session_id);
+                    let key_ji = agent_j.derive_session_key(&agent_i.id, session_id);
+
+                    assert_eq!(
+                        key_ij.as_bytes(),
+                        key_ji.as_bytes(),
+                        "Session key symmetry violated for agents {} and {} with session {}",
+                        i,
+                        j,
+                        session_id
+                    );
+                }
+            }
+        }
+    }
+
+    /// INV-K2: derive(A, B, s1) ≠ derive(A, B, s2) [session isolation]
+    #[test]
+    fn inv_k2_session_isolation() {
+        let org = TestOrg::new("alpha", 2);
+        let alice = org.agent(0);
+        let bob = org.agent(1);
+
+        let session_ids = ["session-1", "session-2", "session-3", "different", ""];
+        let mut keys = HashSet::new();
+
+        for sid in &session_ids {
+            let key = alice.derive_session_key(&bob.id, sid);
+            let is_new = keys.insert(key.as_bytes().to_vec());
+            assert!(is_new, "Session '{}' produced duplicate key", sid);
+        }
+
+        assert_eq!(
+            keys.len(),
+            session_ids.len(),
+            "All session keys must be unique"
+        );
+    }
+
+    /// INV-K3: derive_org1(A, B) ≠ derive_org2(A, B) [org isolation]
+    #[test]
+    fn inv_k3_org_isolation() {
+        let org_alpha = TestOrg::new("alpha", 2);
+        let org_beta = TestOrg::new("beta", 2);
+
+        // Same agent indices, same session ID, different orgs
+        let alice_alpha = org_alpha.agent(0);
+        let bob_alpha = org_alpha.agent(1);
+        let alice_beta = org_beta.agent(0);
+        let bob_beta = org_beta.agent(1);
+
+        let key_alpha = alice_alpha.derive_session_key(&bob_alpha.id, "cross-org-test");
+        let key_beta = alice_beta.derive_session_key(&bob_beta.id, "cross-org-test");
+
+        assert_ne!(
+            key_alpha.as_bytes(),
+            key_beta.as_bytes(),
+            "Different orgs must produce different keys"
+        );
+    }
+
+    /// INV-K4: All agent identity keys are unique within an org
+    #[test]
+    fn inv_k4_identity_key_uniqueness() {
+        let org = TestOrg::new("alpha", 100);
+
+        let mut identity_keys = HashSet::new();
+
+        for agent in &org.agents {
+            let key = agent.key_context.identity_key().as_bytes().to_vec();
+            let is_new = identity_keys.insert(key);
+            assert!(
+                is_new,
+                "Duplicate identity key for agent {}",
+                agent.id.as_str()
+            );
+        }
+
+        assert_eq!(
+            identity_keys.len(),
+            100,
+            "All 100 identity keys must be unique"
+        );
+    }
+
+    // =========================================================================
+    // KEY EXCHANGE INVARIANTS
+    // =========================================================================
+
+    /// INV-X1: alice.dh(bob.pub) == bob.dh(alice.pub)
+    #[test]
+    fn inv_x1_dh_agreement() {
+        for _ in 0..100 {
+            let mut alice = KeyExchange::new();
+            let mut bob = KeyExchange::new();
+
+            alice.set_peer_public(bob.public_key().clone());
+            bob.set_peer_public(alice.public_key().clone());
+
+            let alice_shared = alice.derive_session_key("test").unwrap();
+            let bob_shared = bob.derive_session_key("test").unwrap();
+
+            assert_eq!(
+                alice_shared.as_bytes(),
+                bob_shared.as_bytes(),
+                "DH key agreement failed"
+            );
+        }
+    }
+
+    /// INV-X2: Each KeyExchange produces unique keypair
+    #[test]
+    fn inv_x2_keypair_uniqueness() {
+        let mut public_keys = HashSet::new();
+
+        for _ in 0..100 {
+            let exchange = KeyExchange::new();
+            let pubkey = exchange.public_key().as_bytes().to_vec();
+            let is_new = public_keys.insert(pubkey);
+            assert!(is_new, "Duplicate public key generated");
+        }
+
+        assert_eq!(public_keys.len(), 100);
+    }
+
+    // =========================================================================
+    // FRAMING INVARIANTS
+    // =========================================================================
+
+    /// INV-F1: decode(encode(frame)) == frame
+    #[test]
+    fn inv_f1_frame_roundtrip() {
+        let payloads = [
+            r#"{"model":"gpt-4o","messages":[{"role":"user","content":"Hi"}]}"#,
+            r#"{"model":"claude-3-opus","messages":[{"role":"system","content":"You are helpful."},{"role":"user","content":"Hello"}],"temperature":0.7}"#,
+            r#"{"model":"gpt-4o","messages":[{"role":"user","content":"Test with unicode: 你好 🚀 émoji"}]}"#,
+        ];
+
+        for payload in payloads {
+            let frame = M2MFrame::new_request(payload).unwrap();
+            let encoded = frame.encode().unwrap();
+            let decoded = M2MFrame::decode(&encoded).unwrap();
+
+            assert_eq!(
+                decoded.payload, payload,
+                "Frame roundtrip failed for: {}",
+                payload
+            );
+            assert_eq!(decoded.fixed.schema, frame.fixed.schema);
+        }
+    }
+
+    /// INV-F2: Wire format starts with correct prefix
+    #[test]
+    fn inv_f2_wire_format_prefix() {
+        let payload = r#"{"model":"gpt-4o","messages":[{"role":"user","content":"Test"}]}"#;
+        let frame = M2MFrame::new_request(payload).unwrap();
+
+        let encoded = frame.encode().unwrap();
+        assert!(
+            encoded.starts_with(b"#M2M|1|"),
+            "Wire format must start with #M2M|1|"
+        );
+
+        let encoded_string = frame.encode_string().unwrap();
+        assert!(
+            encoded_string.starts_with("#M2M|1|"),
+            "String format must start with #M2M|1|"
+        );
+    }
+
+    /// INV-F3: Empty and edge case payloads
+    #[test]
+    fn inv_f3_edge_case_payloads() {
+        // Minimal valid JSON
+        let minimal = r#"{"model":"x","messages":[]}"#;
+        let frame = M2MFrame::new_request(minimal).unwrap();
+        let encoded = frame.encode().unwrap();
+        let decoded = M2MFrame::decode(&encoded).unwrap();
+        assert_eq!(decoded.payload, minimal);
+
+        // Large payload (1MB)
+        let large_content = "x".repeat(100_000);
+        let large_json = format!(
+            r#"{{"model":"gpt-4o","messages":[{{"role":"user","content":"{}"}}]}}"#,
+            large_content
+        );
+        let frame = M2MFrame::new_request(&large_json).unwrap();
+        let encoded = frame.encode().unwrap();
+        let decoded = M2MFrame::decode(&encoded).unwrap();
+        assert_eq!(decoded.payload, large_json);
+
+        // Unicode content
+        let unicode = r#"{"model":"gpt-4o","messages":[{"role":"user","content":"日本語 中文 한국어 العربية 🎉🚀💻"}]}"#;
+        let frame = M2MFrame::new_request(unicode).unwrap();
+        let encoded = frame.encode().unwrap();
+        let decoded = M2MFrame::decode(&encoded).unwrap();
+        assert_eq!(decoded.payload, unicode);
+    }
+
+    // =========================================================================
+    // SESSION INVARIANTS
+    // =========================================================================
+
+    /// INV-S1: State transitions follow defined FSM
+    #[test]
+    fn inv_s1_session_state_machine() {
+        let mut alice = Session::new(Capabilities::new("alice"));
+        let mut bob = Session::new(Capabilities::new("bob"));
+
+        // Initial state
+        assert_eq!(alice.state(), SessionState::Initial);
+        assert_eq!(bob.state(), SessionState::Initial);
+
+        // Alice sends HELLO → HelloSent
+        let hello = alice.create_hello();
+        assert_eq!(alice.state(), SessionState::HelloSent);
+
+        // Bob processes HELLO → Established
+        let accept = bob.process_hello(&hello).unwrap();
+        assert_eq!(bob.state(), SessionState::Established);
+
+        // Alice processes ACCEPT → Established
+        alice.process_accept(&accept).unwrap();
+        assert_eq!(alice.state(), SessionState::Established);
+    }
+
+    /// INV-S2: Session IDs match after handshake
+    #[test]
+    fn inv_s2_session_id_agreement() {
+        for _ in 0..10 {
+            let mut alice = Session::new(Capabilities::new("alice"));
+            let mut bob = Session::new(Capabilities::new("bob"));
+
+            let hello = alice.create_hello();
+            let accept = bob.process_hello(&hello).unwrap();
+            alice.process_accept(&accept).unwrap();
+
+            assert_eq!(
+                alice.id(),
+                bob.id(),
+                "Session IDs must match after handshake"
+            );
+            assert!(!alice.id().is_empty(), "Session ID must not be empty");
+        }
+    }
+}
+
+// =============================================================================
+// PHASE 9: PERFORMANCE REGRESSION TESTS
+// =============================================================================
+
+/// Performance regression tests with explicit thresholds
+mod performance {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    /// Key derivation must complete in reasonable time
+    #[test]
+    fn perf_key_derivation_under_threshold() {
+        let org = TestOrg::new("alpha", 2);
+        let alice = org.agent(0);
+        let bob = org.agent(1);
+
+        let iterations = 1000;
+        let start = Instant::now();
+
+        for i in 0..iterations {
+            let _ = alice.derive_session_key(&bob.id, &format!("session-{}", i));
+        }
+
+        let duration = start.elapsed();
+        let per_op = duration / iterations;
+
+        // Threshold: 100µs per derivation (very conservative)
+        let threshold = Duration::from_micros(100);
+
+        println!(
+            "Key derivation: {:?} per op ({} iterations)",
+            per_op, iterations
+        );
+
+        assert!(
+            per_op < threshold,
+            "Key derivation too slow: {:?} > {:?} threshold",
+            per_op,
+            threshold
+        );
+    }
+
+    /// Encryption must maintain minimum throughput
+    #[test]
+    fn perf_encryption_throughput() {
+        let org = TestOrg::new("alpha", 2);
+        let alice = org.agent(0);
+        let bob = org.agent(1);
+
+        let payload = r#"{"model":"gpt-4o","messages":[{"role":"system","content":"You are helpful."},{"role":"user","content":"Explain quantum computing."}],"temperature":0.7}"#;
+        let _payload_size = payload.len();
+
+        let iterations = 500;
+        let mut total_bytes = 0usize;
+
+        let start = Instant::now();
+
+        for i in 0..iterations {
+            let mut ctx = alice.create_security_context(&bob.id, &format!("perf-{}", i));
+            let frame = M2MFrame::new_request(payload).unwrap();
+            let encrypted = frame.encode_secure(SecurityMode::Aead, &mut ctx).unwrap();
+            total_bytes += encrypted.len();
+        }
+
+        let duration = start.elapsed();
+        let throughput_mbps = (total_bytes as f64 / duration.as_secs_f64()) / 1_000_000.0;
+
+        // Threshold: 0.5 MB/s minimum (very conservative for debug builds)
+        let threshold_mbps = 0.5;
+
+        println!(
+            "Encryption: {:.2} MB/s ({} bytes in {:?})",
+            throughput_mbps, total_bytes, duration
+        );
+
+        assert!(
+            throughput_mbps > threshold_mbps,
+            "Encryption throughput too low: {:.2} MB/s < {:.2} MB/s threshold",
+            throughput_mbps,
+            threshold_mbps
+        );
+    }
+
+    /// Full roundtrip (encrypt + decrypt) must meet performance target
+    #[test]
+    fn perf_roundtrip_latency() {
+        let org = TestOrg::new("alpha", 2);
+        let alice = org.agent(0);
+        let bob = org.agent(1);
+
+        let payload = r#"{"model":"gpt-4o","messages":[{"role":"user","content":"Hello"}]}"#;
+
+        let iterations = 500;
+        let start = Instant::now();
+
+        for i in 0..iterations {
+            let session_id = format!("roundtrip-{}", i);
+            let mut alice_ctx = alice.create_security_context(&bob.id, &session_id);
+            let bob_ctx = bob.create_security_context(&alice.id, &session_id);
+
+            let frame = M2MFrame::new_request(payload).unwrap();
+            let encrypted = frame
+                .encode_secure(SecurityMode::Aead, &mut alice_ctx)
+                .unwrap();
+            let decrypted = M2MFrame::decode_secure(&encrypted, &bob_ctx).unwrap();
+
+            assert_eq!(decrypted.payload, payload);
+        }
+
+        let duration = start.elapsed();
+        let per_roundtrip = duration / iterations;
+
+        // Threshold: 500µs per roundtrip (conservative for debug builds)
+        let threshold = Duration::from_micros(500);
+
+        println!(
+            "Roundtrip latency: {:?} ({} iterations in {:?})",
+            per_roundtrip, iterations, duration
+        );
+
+        assert!(
+            per_roundtrip < threshold,
+            "Roundtrip too slow: {:?} > {:?} threshold",
+            per_roundtrip,
+            threshold
+        );
+    }
+
+    /// Mesh communication scales linearly
+    #[test]
+    fn perf_mesh_scaling() {
+        let payload = r#"{"model":"gpt-4o","messages":[{"role":"user","content":"Test"}]}"#;
+
+        // Test with 10 and 20 agents
+        let (time_10, pairs_10) = measure_mesh_time(10, payload);
+        let (time_20, pairs_20) = measure_mesh_time(20, payload);
+
+        let per_pair_10 = time_10.as_nanos() as f64 / pairs_10 as f64;
+        let per_pair_20 = time_20.as_nanos() as f64 / pairs_20 as f64;
+
+        println!(
+            "10 agents: {:?} for {} pairs ({:.0} ns/pair)",
+            time_10, pairs_10, per_pair_10
+        );
+        println!(
+            "20 agents: {:?} for {} pairs ({:.0} ns/pair)",
+            time_20, pairs_20, per_pair_20
+        );
+
+        // Per-pair time should not more than double (allow 2.5x for variance)
+        let scaling_factor = per_pair_20 / per_pair_10;
+
+        assert!(
+            scaling_factor < 2.5,
+            "Mesh scaling degraded: {:.2}x slowdown per pair (expected < 2.5x)",
+            scaling_factor
+        );
+    }
+
+    fn measure_mesh_time(agent_count: usize, payload: &str) -> (Duration, usize) {
+        let org = TestOrg::new("perf-mesh", agent_count);
+
+        let start = Instant::now();
+        let mut pairs = 0;
+
+        for i in 0..agent_count {
+            for j in 0..agent_count {
+                if i == j {
+                    continue;
+                }
+
+                let sender = &org.agents[i];
+                let receiver = &org.agents[j];
+
+                let session_id = format!("mesh-{}-{}", i, j);
+                let mut sender_ctx = sender.create_security_context(&receiver.id, &session_id);
+                let receiver_ctx = receiver.create_security_context(&sender.id, &session_id);
+
+                let frame = M2MFrame::new_request(payload).unwrap();
+                let encrypted = frame
+                    .encode_secure(SecurityMode::Aead, &mut sender_ctx)
+                    .unwrap();
+                let _ = M2MFrame::decode_secure(&encrypted, &receiver_ctx).unwrap();
+
+                pairs += 1;
+            }
+        }
+
+        (start.elapsed(), pairs)
+    }
 }
