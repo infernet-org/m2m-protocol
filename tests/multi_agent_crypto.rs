@@ -1185,11 +1185,462 @@ async fn test_cross_org_autonomous_chat() {
 }
 
 // =============================================================================
-// PHASE 7: NETWORK (Full simulation - future expansion)
+// PHASE 7: PROTOCOL METRICS & INSTRUMENTATION
 // =============================================================================
 
-// Phase 7 tests will be added in subsequent iterations:
-// - test_20_agent_mesh
-// - test_40_agent_cross_org
-// - test_100_agent_full_network
-// - test_distributed_research_task
+/// Metrics collected during protocol operations
+#[derive(Debug, Default)]
+struct ProtocolMetrics {
+    // Compression
+    total_original_bytes: usize,
+    total_compressed_bytes: usize,
+    total_encrypted_bytes: usize,
+
+    // Operations
+    key_derivations: usize,
+    encryptions: usize,
+    decryptions: usize,
+
+    // Overhead breakdown
+    prefix_overhead: usize, // #M2M|1| prefix
+    header_overhead: usize, // Fixed + routing headers
+    nonce_overhead: usize,  // 12 bytes per AEAD
+    tag_overhead: usize,    // 16 bytes per AEAD
+
+    // Timing (if needed)
+    total_encrypt_ns: u128,
+    total_decrypt_ns: u128,
+}
+
+impl ProtocolMetrics {
+    fn compression_ratio(&self) -> f64 {
+        if self.total_original_bytes == 0 {
+            return 0.0;
+        }
+        self.total_compressed_bytes as f64 / self.total_original_bytes as f64
+    }
+
+    fn encryption_overhead(&self) -> f64 {
+        if self.total_compressed_bytes == 0 {
+            return 0.0;
+        }
+        (self.total_encrypted_bytes as f64 / self.total_compressed_bytes as f64) - 1.0
+    }
+
+    fn total_overhead(&self) -> f64 {
+        if self.total_original_bytes == 0 {
+            return 0.0;
+        }
+        (self.total_encrypted_bytes as f64 / self.total_original_bytes as f64) - 1.0
+    }
+
+    fn print_summary(&self) {
+        println!("\n╔══════════════════════════════════════════════════════════════╗");
+        println!("║              PROTOCOL METRICS SUMMARY                        ║");
+        println!("╠══════════════════════════════════════════════════════════════╣");
+        println!("║ SIZES                                                        ║");
+        println!(
+            "║   Original payload:     {:>10} bytes                     ║",
+            self.total_original_bytes
+        );
+        println!(
+            "║   After compression:    {:>10} bytes ({:>5.1}%)            ║",
+            self.total_compressed_bytes,
+            self.compression_ratio() * 100.0
+        );
+        println!(
+            "║   After encryption:     {:>10} bytes                     ║",
+            self.total_encrypted_bytes
+        );
+        println!("╠══════════════════════════════════════════════════════════════╣");
+        println!("║ OVERHEAD BREAKDOWN                                           ║");
+        println!(
+            "║   Prefix (#M2M|1|):     {:>10} bytes                     ║",
+            self.prefix_overhead
+        );
+        println!(
+            "║   Headers (fixed+var):  {:>10} bytes                     ║",
+            self.header_overhead
+        );
+        println!(
+            "║   Nonce (per message):  {:>10} bytes                     ║",
+            self.nonce_overhead
+        );
+        println!(
+            "║   AEAD tag (per msg):   {:>10} bytes                     ║",
+            self.tag_overhead
+        );
+        println!("╠══════════════════════════════════════════════════════════════╣");
+        println!("║ EFFICIENCY                                                   ║");
+        println!(
+            "║   Compression ratio:    {:>10.1}%                          ║",
+            self.compression_ratio() * 100.0
+        );
+        println!(
+            "║   Encryption overhead:  {:>10.1}%                          ║",
+            self.encryption_overhead() * 100.0
+        );
+        println!(
+            "║   Total overhead:       {:>10.1}%                          ║",
+            self.total_overhead() * 100.0
+        );
+        if self.total_overhead() > 0.0 {
+            println!("║   ⚠️  INEFFICIENCY: Output larger than input!                ║");
+        } else {
+            println!(
+                "║   ✅ Net savings: {:>5.1}%                                   ║",
+                -self.total_overhead() * 100.0
+            );
+        }
+        println!("╠══════════════════════════════════════════════════════════════╣");
+        println!("║ OPERATIONS                                                   ║");
+        println!(
+            "║   Key derivations:      {:>10}                           ║",
+            self.key_derivations
+        );
+        println!(
+            "║   Encryptions:          {:>10}                           ║",
+            self.encryptions
+        );
+        println!(
+            "║   Decryptions:          {:>10}                           ║",
+            self.decryptions
+        );
+        println!("╚══════════════════════════════════════════════════════════════╝");
+    }
+}
+
+/// Protocol efficiency analysis with detailed metrics
+#[test]
+fn test_protocol_efficiency_metrics() {
+    use std::time::Instant;
+
+    let org = TestOrg::new("alpha", 2);
+    let alice = org.agent(0);
+    let bob = org.agent(1);
+
+    let mut metrics = ProtocolMetrics::default();
+
+    // Test payloads of various sizes
+    let payloads = [
+        // Small payload (typical single message)
+        r#"{"model":"gpt-4o","messages":[{"role":"user","content":"Hello"}]}"#,
+        // Medium payload (multi-turn conversation)
+        r#"{"model":"gpt-4o","messages":[{"role":"system","content":"You are a helpful assistant."},{"role":"user","content":"What is the capital of France?"},{"role":"assistant","content":"Paris."},{"role":"user","content":"What about Germany?"}],"temperature":0.7}"#,
+        // Large payload (with code)
+        r#"{"model":"gpt-4o","messages":[{"role":"system","content":"You are a Rust expert."},{"role":"user","content":"Write a function that implements binary search."},{"role":"assistant","content":"```rust\nfn binary_search<T: Ord>(arr: &[T], target: &T) -> Option<usize> {\n    let mut left = 0;\n    let mut right = arr.len();\n    while left < right {\n        let mid = left + (right - left) / 2;\n        match arr[mid].cmp(target) {\n            std::cmp::Ordering::Equal => return Some(mid),\n            std::cmp::Ordering::Less => left = mid + 1,\n            std::cmp::Ordering::Greater => right = mid,\n        }\n    }\n    None\n}\n```"},{"role":"user","content":"Can you add error handling?"}],"temperature":0.5,"max_tokens":500}"#,
+    ];
+
+    let session_id = "metrics-test";
+    let mut alice_ctx = alice.create_security_context(&bob.id, session_id);
+    let bob_ctx = bob.create_security_context(&alice.id, session_id);
+    metrics.key_derivations += 2;
+
+    println!("\n=== Protocol Efficiency Analysis ===\n");
+
+    for (i, payload) in payloads.iter().enumerate() {
+        let original_len = payload.len();
+        metrics.total_original_bytes += original_len;
+
+        // Create frame
+        let frame = M2MFrame::new_request(payload).expect("Frame creation failed");
+
+        // Encode without encryption first to measure compression
+        let encoded_plain = frame.encode().expect("Plain encode failed");
+        let compressed_len = encoded_plain.len();
+        metrics.total_compressed_bytes += compressed_len;
+
+        // Encode with AEAD
+        let start = Instant::now();
+        let encrypted = frame
+            .encode_secure(SecurityMode::Aead, &mut alice_ctx)
+            .expect("Encryption failed");
+        metrics.total_encrypt_ns += start.elapsed().as_nanos();
+        metrics.encryptions += 1;
+
+        let encrypted_len = encrypted.len();
+        metrics.total_encrypted_bytes += encrypted_len;
+
+        // Measure overhead components
+        metrics.prefix_overhead += 7; // #M2M|1|
+        metrics.nonce_overhead += 12; // AEAD nonce
+        metrics.tag_overhead += 16; // AEAD tag
+
+        // Decrypt to verify
+        let start = Instant::now();
+        let decrypted = M2MFrame::decode_secure(&encrypted, &bob_ctx).expect("Decryption failed");
+        metrics.total_decrypt_ns += start.elapsed().as_nanos();
+        metrics.decryptions += 1;
+
+        assert_eq!(decrypted.payload, *payload, "Payload mismatch");
+
+        // Per-payload stats
+        let compression_ratio = compressed_len as f64 / original_len as f64;
+        let encryption_overhead = (encrypted_len as f64 / compressed_len as f64) - 1.0;
+        let total_ratio = encrypted_len as f64 / original_len as f64;
+
+        println!("Payload {}: {} bytes", i + 1, original_len);
+        println!(
+            "  Compressed: {} bytes ({:.1}%)",
+            compressed_len,
+            compression_ratio * 100.0
+        );
+        println!(
+            "  Encrypted:  {} bytes (+{:.1}% overhead)",
+            encrypted_len,
+            encryption_overhead * 100.0
+        );
+        println!(
+            "  Total:      {:.1}% of original {}",
+            total_ratio * 100.0,
+            if total_ratio < 1.0 {
+                "✅ SAVINGS"
+            } else {
+                "⚠️ LARGER"
+            }
+        );
+        println!();
+    }
+
+    // Calculate header overhead (total - payload - nonce - tag)
+    metrics.header_overhead = metrics
+        .total_encrypted_bytes
+        .saturating_sub(metrics.total_compressed_bytes)
+        .saturating_sub(metrics.nonce_overhead)
+        .saturating_sub(metrics.tag_overhead)
+        .saturating_sub(metrics.prefix_overhead);
+
+    metrics.print_summary();
+
+    // Assertions for efficiency
+    // Compression should achieve some savings on larger payloads
+    // But small payloads may have overhead due to headers
+}
+
+/// Measure key derivation performance at scale
+#[test]
+fn test_key_derivation_performance() {
+    use std::time::Instant;
+
+    println!("\n=== Key Derivation Performance ===\n");
+
+    let org = TestOrg::new("alpha", 100);
+
+    // Measure identity key derivation (already done in TestOrg::new)
+    // Now measure session key derivation
+
+    let start = Instant::now();
+    let mut session_keys = Vec::with_capacity(100);
+
+    // Derive session keys for first 10 agents with all others
+    // Note: session keys are symmetric, so A->B == B->A
+    for i in 0..10 {
+        for j in 0..100 {
+            if i != j {
+                let key = org.agents[i].derive_session_key(&org.agents[j].id, "perf-test");
+                session_keys.push(key);
+            }
+        }
+    }
+
+    let duration = start.elapsed();
+    let derivations = session_keys.len();
+    let per_derivation_ns = duration.as_nanos() / derivations as u128;
+
+    println!("Session key derivations: {}", derivations);
+    println!("Total time: {:?}", duration);
+    println!(
+        "Per derivation: {} ns ({:.2} µs)",
+        per_derivation_ns,
+        per_derivation_ns as f64 / 1000.0
+    );
+    println!(
+        "Throughput: {:.0} derivations/second",
+        1_000_000_000.0 / per_derivation_ns as f64
+    );
+
+    // Count unique keys
+    // Note: Due to symmetry (A,B) == (B,A), we expect some duplicates when i<10 and j<10
+    let unique_keys: std::collections::HashSet<Vec<u8>> =
+        session_keys.iter().map(|k| k.as_bytes().to_vec()).collect();
+
+    // Expected unique: 10*99 = 990 total derivations
+    // But pairs where both i,j < 10 will be duplicated: 10*9 = 90 pairs, 45 unique
+    // So unique = 990 - 45 = 945
+    let expected_unique = derivations - 45; // 45 symmetric duplicates
+
+    println!("\nUniqueness analysis:");
+    println!("  Total derivations: {}", derivations);
+    println!("  Unique keys: {}", unique_keys.len());
+    println!(
+        "  Symmetric duplicates: {} (expected ~45 from pairs where both agents < 10)",
+        derivations - unique_keys.len()
+    );
+
+    assert_eq!(
+        unique_keys.len(),
+        expected_unique,
+        "Expected {} unique keys (accounting for symmetric pairs)",
+        expected_unique
+    );
+    println!("\n✅ Key derivation is symmetric as expected");
+}
+
+/// Measure encryption/decryption throughput
+#[test]
+fn test_encryption_throughput() {
+    use std::time::Instant;
+
+    println!("\n=== Encryption Throughput ===\n");
+
+    let org = TestOrg::new("alpha", 2);
+    let alice = org.agent(0);
+    let bob = org.agent(1);
+
+    // Medium-sized realistic payload
+    let payload = r#"{"model":"gpt-4o","messages":[{"role":"system","content":"You are a helpful AI assistant."},{"role":"user","content":"Explain quantum computing in simple terms."}],"temperature":0.7,"max_tokens":500}"#;
+
+    let iterations = 1000;
+    let payload_bytes = payload.len();
+
+    // Warm up
+    let mut ctx = alice.create_security_context(&bob.id, "warmup");
+    let frame = M2MFrame::new_request(payload).unwrap();
+    let _ = frame.encode_secure(SecurityMode::Aead, &mut ctx);
+
+    // Measure encryption
+    let mut ctx = alice.create_security_context(&bob.id, "throughput-test");
+    let start = Instant::now();
+
+    let mut encrypted_samples = Vec::with_capacity(iterations);
+    for _ in 0..iterations {
+        let frame = M2MFrame::new_request(payload).unwrap();
+        let encrypted = frame.encode_secure(SecurityMode::Aead, &mut ctx).unwrap();
+        encrypted_samples.push(encrypted);
+    }
+
+    let encrypt_duration = start.elapsed();
+
+    // Measure decryption
+    let bob_ctx = bob.create_security_context(&alice.id, "throughput-test");
+    let start = Instant::now();
+
+    for encrypted in &encrypted_samples {
+        let _ = M2MFrame::decode_secure(encrypted, &bob_ctx).unwrap();
+    }
+
+    let decrypt_duration = start.elapsed();
+
+    // Calculate metrics
+    let total_bytes = payload_bytes * iterations;
+    let encrypt_throughput_mbps =
+        (total_bytes as f64 / encrypt_duration.as_secs_f64()) / 1_000_000.0;
+    let decrypt_throughput_mbps =
+        (total_bytes as f64 / decrypt_duration.as_secs_f64()) / 1_000_000.0;
+
+    println!("Payload size: {} bytes", payload_bytes);
+    println!("Iterations: {}", iterations);
+    println!();
+    println!("Encryption:");
+    println!("  Total time: {:?}", encrypt_duration);
+    println!(
+        "  Per operation: {:.2} µs",
+        encrypt_duration.as_micros() as f64 / iterations as f64
+    );
+    println!("  Throughput: {:.2} MB/s", encrypt_throughput_mbps);
+    println!();
+    println!("Decryption:");
+    println!("  Total time: {:?}", decrypt_duration);
+    println!(
+        "  Per operation: {:.2} µs",
+        decrypt_duration.as_micros() as f64 / iterations as f64
+    );
+    println!("  Throughput: {:.2} MB/s", decrypt_throughput_mbps);
+    println!();
+
+    // Size analysis
+    let encrypted_size = encrypted_samples[0].len();
+    let overhead_bytes = encrypted_size as i64 - payload_bytes as i64;
+    let overhead_pct = (overhead_bytes as f64 / payload_bytes as f64) * 100.0;
+
+    println!("Size analysis:");
+    println!("  Original: {} bytes", payload_bytes);
+    println!("  Encrypted: {} bytes", encrypted_size);
+    println!(
+        "  Overhead: {} bytes ({:+.1}%)",
+        overhead_bytes, overhead_pct
+    );
+}
+
+/// Full mesh communication test with metrics
+#[test]
+fn test_full_mesh_with_metrics() {
+    use std::time::Instant;
+
+    println!("\n=== Full Mesh Communication Test (20 agents) ===\n");
+
+    let org = TestOrg::new("alpha", 20);
+
+    let payload = r#"{"model":"gpt-4o","messages":[{"role":"user","content":"Test message"}]}"#;
+
+    let mut total_encryptions = 0;
+    let mut total_decryptions = 0;
+    let mut total_bytes_encrypted = 0usize;
+    let mut successful_pairs = 0;
+
+    let start = Instant::now();
+
+    // Each agent sends to every other agent
+    for i in 0..20 {
+        for j in 0..20 {
+            if i == j {
+                continue;
+            }
+
+            let sender = &org.agents[i];
+            let receiver = &org.agents[j];
+
+            let session_id = format!("mesh-{}-{}", i, j);
+            let mut sender_ctx = sender.create_security_context(&receiver.id, &session_id);
+            let receiver_ctx = receiver.create_security_context(&sender.id, &session_id);
+
+            let frame = M2MFrame::new_request(payload).unwrap();
+            let encrypted = frame
+                .encode_secure(SecurityMode::Aead, &mut sender_ctx)
+                .unwrap();
+            total_encryptions += 1;
+            total_bytes_encrypted += encrypted.len();
+
+            let decrypted = M2MFrame::decode_secure(&encrypted, &receiver_ctx).unwrap();
+            total_decryptions += 1;
+
+            assert_eq!(decrypted.payload, payload);
+            successful_pairs += 1;
+        }
+    }
+
+    let duration = start.elapsed();
+
+    println!("Agents: 20");
+    println!("Communication pairs: {} (20 × 19)", successful_pairs);
+    println!("Total encryptions: {}", total_encryptions);
+    println!("Total decryptions: {}", total_decryptions);
+    println!(
+        "Total bytes encrypted: {} ({:.2} KB)",
+        total_bytes_encrypted,
+        total_bytes_encrypted as f64 / 1024.0
+    );
+    println!();
+    println!("Performance:");
+    println!("  Total time: {:?}", duration);
+    println!(
+        "  Per pair (encrypt+decrypt): {:.2} µs",
+        duration.as_micros() as f64 / successful_pairs as f64
+    );
+    println!(
+        "  Throughput: {:.0} pairs/second",
+        successful_pairs as f64 / duration.as_secs_f64()
+    );
+    println!();
+    println!("✅ All {} communication pairs successful", successful_pairs);
+}
