@@ -2750,7 +2750,7 @@ mod stress {
 
             // Use all contexts
             let start = Instant::now();
-            for (_i, ctx) in contexts.iter_mut().enumerate() {
+            for ctx in &mut contexts {
                 let frame = M2MFrame::new_request(payload).unwrap();
                 let _ = frame.encode_secure(SecurityMode::Aead, ctx).unwrap();
             }
