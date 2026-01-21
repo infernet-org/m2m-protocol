@@ -62,9 +62,18 @@ Network security (TLS, firewalls, WAFs) operates at the packet level. It can't u
 
 ## Quick Start
 
-```bash
-cargo add m2m-core
+### Installation
+
+```toml
+# Cargo.toml
+[dependencies]
+m2m-protocol = "0.4"
+
+# With cryptographic security (AEAD, HMAC, key exchange)
+m2m-protocol = { version = "0.4", features = ["crypto"] }
 ```
+
+### Basic Usage
 
 ```rust
 use m2m::{CodecEngine, Algorithm};
@@ -79,9 +88,10 @@ let compressed = engine.compress(json, Algorithm::M2M)?;
 let original = engine.decompress(&compressed.data)?;
 ```
 
+### CLI
+
 ```bash
-# CLI
-cargo install m2m-core
+cargo install m2m-protocol
 
 m2m compress '{"model":"gpt-4o","messages":[...]}'
 m2m decompress '#M2M|1|...'

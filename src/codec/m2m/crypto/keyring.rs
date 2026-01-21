@@ -374,7 +374,7 @@ impl Keyring {
 
 /// Simple hex decoder (no external dependency)
 fn hex_decode(hex: &str) -> Result<Vec<u8>, &'static str> {
-    if hex.len() % 2 != 0 {
+    if !hex.len().is_multiple_of(2) {
         return Err("Invalid hex string length");
     }
 

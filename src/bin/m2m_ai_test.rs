@@ -777,7 +777,7 @@ fn print_final_summary(results: &[ScenarioResult]) {
         } else {
             "[!]"
         },
-        (avg_req_tokens + avg_resp_tokens) / 2.0
+        f64::midpoint(avg_req_tokens, avg_resp_tokens)
     );
 
     println!();
