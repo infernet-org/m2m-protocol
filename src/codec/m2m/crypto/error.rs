@@ -6,15 +6,32 @@
 //!
 //! # Epistemic Classification
 //!
-//! All crypto errors represent **B_i falsified** — a belief about the validity
-//! of an operation was proven wrong at runtime:
+//! Crypto errors fall into two categories:
 //!
-//! - Key material invalid → `KeyError`, `KeyringError`
-//! - Encryption/decryption failed → `AeadError`
-//! - Authentication failed → `HmacError`
-//! - Key exchange failed → `KeyExchangeError`
-//! - Nonce generation failed → `NonceError` (I^B - RNG availability)
-//! - ID validation failed → `IdError`
+//! ## B_i Falsified (Belief Proven Wrong)
+//!
+//! Most crypto errors indicate a caller's belief was incorrect:
+//!
+//! | Error | Falsified Belief |
+//! |-------|------------------|
+//! | `Key` | Key material was valid |
+//! | `Keyring` | Key operation would succeed |
+//! | `Aead` | Data was properly encrypted/formatted |
+//! | `Hmac` | Authentication tag was valid |
+//! | `Exchange` | Key exchange parameters were correct |
+//! | `Id` | Identifier was well-formed |
+//!
+//! **Handling**: Validate inputs, don't retry without fixing the issue.
+//!
+//! ## I^B (Bounded Ignorance)
+//!
+//! One error type represents inherent runtime uncertainty:
+//!
+//! | Error | Unknown State |
+//! |-------|---------------|
+//! | `Nonce` | System RNG availability |
+//!
+//! **Handling**: May retry, but RNG failure is usually catastrophic.
 
 use thiserror::Error;
 
@@ -34,6 +51,8 @@ use super::hierarchy::IdError;
 /// This type preserves the full error chain via `#[source]`, enabling
 /// debugging tools to display the complete error context.
 ///
+/// See module documentation for epistemic classification of each variant.
+///
 /// # Example
 ///
 /// ```ignore
@@ -47,35 +66,59 @@ use super::hierarchy::IdError;
 /// ```
 #[derive(Debug, Error)]
 pub enum CryptoError {
-    /// AEAD encryption/decryption error
+    // ═══════════════════════════════════════════════════════════════════════
+    // B_i FALSIFIED — Caller's belief about crypto validity proven wrong
+    // ═══════════════════════════════════════════════════════════════════════
+    /// AEAD encryption/decryption error.
+    ///
+    /// **Epistemic**: B_i falsified — data was not properly encrypted/formatted.
     #[error("AEAD: {0}")]
     Aead(#[source] AeadError),
 
-    /// HMAC authentication error
+    /// HMAC authentication error.
+    ///
+    /// **Epistemic**: B_i falsified — authentication tag did not verify.
     #[error("HMAC: {0}")]
     Hmac(#[source] HmacError),
 
-    /// Key material error (empty, too short)
+    /// Key material error (empty, too short, invalid).
+    ///
+    /// **Epistemic**: B_i falsified — key material was not valid.
     #[error("Key: {0}")]
     Key(#[source] KeyError),
 
-    /// Keyring operation error
+    /// Keyring operation error.
+    ///
+    /// **Epistemic**: B_i falsified — keyring operation preconditions not met.
     #[error("Keyring: {0}")]
     Keyring(#[source] KeyringError),
 
-    /// Nonce generation error (RNG failure)
-    #[error("Nonce: {0}")]
-    Nonce(#[source] NonceError),
-
-    /// Key exchange error (X25519)
+    /// Key exchange error (X25519).
+    ///
+    /// **Epistemic**: B_i falsified — key exchange parameters were invalid.
     #[cfg(feature = "crypto")]
     #[error("Key exchange: {0}")]
     Exchange(#[source] KeyExchangeError),
 
-    /// ID validation error (AgentId, OrgId)
+    /// ID validation error (AgentId, OrgId).
+    ///
+    /// **Epistemic**: B_i falsified — identifier format was invalid.
     #[cfg(feature = "crypto")]
     #[error("ID validation: {0}")]
     Id(#[source] IdError),
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // I^B — Bounded Ignorance (RNG state unknown until runtime)
+    // ═══════════════════════════════════════════════════════════════════════
+    /// Nonce generation error (RNG failure).
+    ///
+    /// **Epistemic**: I^B materialized — system RNG availability was unknown
+    /// until generation was attempted.
+    ///
+    /// **Note**: RNG failure is rare but catastrophic. If this occurs,
+    /// the system entropy pool may be exhausted or unavailable.
+    #[error("Nonce: {0}")]
+    Nonce(#[source] NonceError),
 }
 
 // ============================================================================
