@@ -26,21 +26,19 @@
 //! 2. **Cross-Organization Agents**: Use X25519 key exchange, then HKDF
 //!    to derive session keys from the shared secret.
 //!
-//! # Example
+//! # ID Validation
+//!
+//! Both `AgentId` and `OrgId` validate their inputs:
+//!
+//! - Must be non-empty
+//! - Must contain only valid characters (alphanumeric, hyphen, underscore)
+//! - Maximum length of 128 characters
+//!
+//! Use `try_new()` for validated construction:
 //!
 //! ```ignore
-//! use m2m::codec::m2m::crypto::hierarchy::{KeyHierarchy, AgentId};
-//!
-//! // Organization sets up key hierarchy
-//! let hierarchy = KeyHierarchy::new(master_secret, "org-acme");
-//!
-//! // Derive keys for 100 agents
-//! for i in 0..100 {
-//!     let agent_key = hierarchy.derive_agent_key(&AgentId::new(format!("agent-{}", i)));
-//! }
-//!
-//! // Two agents can derive the same session key
-//! let session = hierarchy.derive_session_key(&agent_a, &agent_b, session_id);
+//! let agent = AgentId::try_new("agent-001")?;
+//! let org = OrgId::try_new("acme-corp")?;
 //! ```
 //!
 //! # Test Vectors
@@ -56,16 +54,111 @@
 //! ```
 
 use super::keyring::{KeyMaterial, KeyringError};
+use thiserror::Error;
 
 /// M2M key derivation version prefix
 pub const M2M_KDF_VERSION: &str = "m2m/v1";
 
-/// Agent identifier within an organization
+/// Maximum length for IDs (agent and org)
+pub const MAX_ID_LENGTH: usize = 128;
+
+/// Errors from identifier validation.
+///
+/// # Epistemic Classification
+///
+/// All variants represent **B_i falsified** — the caller's belief that
+/// the identifier was valid has been proven wrong.
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum IdError {
+    /// Identifier is empty
+    #[error("{kind} ID cannot be empty")]
+    Empty {
+        /// The kind of ID (e.g., "Agent", "Organization")
+        kind: &'static str,
+    },
+
+    /// Identifier contains invalid characters
+    #[error("{kind} ID contains invalid characters (only alphanumeric, hyphen, underscore allowed): {value}")]
+    InvalidChars {
+        /// The kind of ID
+        kind: &'static str,
+        /// The invalid value
+        value: String,
+    },
+
+    /// Identifier is too long
+    #[error("{kind} ID too long: {len} chars (max {max})")]
+    TooLong {
+        /// The kind of ID
+        kind: &'static str,
+        /// Actual length
+        len: usize,
+        /// Maximum allowed length
+        max: usize,
+    },
+}
+
+/// Check if a character is valid for an ID
+fn is_valid_id_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '-' || c == '_'
+}
+
+/// Validate an ID string
+fn validate_id(id: &str, kind: &'static str) -> Result<(), IdError> {
+    if id.is_empty() {
+        return Err(IdError::Empty { kind });
+    }
+    if id.len() > MAX_ID_LENGTH {
+        return Err(IdError::TooLong {
+            kind,
+            len: id.len(),
+            max: MAX_ID_LENGTH,
+        });
+    }
+    if !id.chars().all(is_valid_id_char) {
+        return Err(IdError::InvalidChars {
+            kind,
+            value: id.to_string(),
+        });
+    }
+    Ok(())
+}
+
+/// Agent identifier within an organization.
+///
+/// # Validation
+///
+/// Valid agent IDs:
+/// - Must be non-empty
+/// - Must contain only alphanumeric characters, hyphens, and underscores
+/// - Maximum 128 characters
+///
+/// # Epistemic Properties
+///
+/// - **K_i**: After successful `try_new()`, the ID is guaranteed valid
+/// - **B_i**: `new()` assumes validity (caller's responsibility)
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AgentId(String);
 
 impl AgentId {
-    /// Create a new agent ID
+    /// Create a new validated agent ID.
+    ///
+    /// # Errors
+    ///
+    /// Returns `IdError` if the ID is empty, contains invalid characters,
+    /// or exceeds the maximum length.
+    pub fn try_new(id: impl Into<String>) -> Result<Self, IdError> {
+        let id = id.into();
+        validate_id(&id, "Agent")?;
+        Ok(Self(id))
+    }
+
+    /// Create a new agent ID without validation.
+    ///
+    /// # Warning
+    ///
+    /// This does not validate the ID. Prefer `try_new()` for user input.
+    /// Empty or invalid IDs may cause issues with key derivation paths.
     pub fn new(id: impl Into<String>) -> Self {
         Self(id.into())
     }
@@ -100,6 +193,68 @@ impl From<u32> for AgentId {
     }
 }
 
+/// Organization identifier.
+///
+/// # Validation
+///
+/// Valid organization IDs:
+/// - Must be non-empty
+/// - Must contain only alphanumeric characters, hyphens, and underscores
+/// - Maximum 128 characters
+///
+/// # Epistemic Properties
+///
+/// - **K_i**: After successful `try_new()`, the ID is guaranteed valid
+/// - **B_i**: `new()` assumes validity (caller's responsibility)
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct OrgId(String);
+
+impl OrgId {
+    /// Create a new validated organization ID.
+    ///
+    /// # Errors
+    ///
+    /// Returns `IdError` if the ID is empty, contains invalid characters,
+    /// or exceeds the maximum length.
+    pub fn try_new(id: impl Into<String>) -> Result<Self, IdError> {
+        let id = id.into();
+        validate_id(&id, "Organization")?;
+        Ok(Self(id))
+    }
+
+    /// Create a new organization ID without validation.
+    ///
+    /// # Warning
+    ///
+    /// This does not validate the ID. Prefer `try_new()` for user input.
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+
+    /// Get the ID as a string
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for OrgId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl From<&str> for OrgId {
+    fn from(s: &str) -> Self {
+        Self::new(s)
+    }
+}
+
+impl From<String> for OrgId {
+    fn from(s: String) -> Self {
+        Self::new(s)
+    }
+}
+
 /// Key purpose for domain separation
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyPurpose {
@@ -129,16 +284,39 @@ impl KeyPurpose {
 /// Provides deterministic key derivation from a master secret,
 /// allowing multiple agents to derive unique keys and establish
 /// shared session keys without explicit key exchange.
+///
+/// # Epistemic Properties
+///
+/// - **K_i**: Organization ID is stored (existence guaranteed)
+/// - **B_i**: Caller assumes org_id is valid when using `new()` (use `try_new()` for validation)
 #[derive(Debug, Clone)]
 pub struct KeyHierarchy {
     /// Organization master secret
     master: KeyMaterial,
     /// Organization identifier
-    org_id: String,
+    org_id: OrgId,
 }
 
 impl KeyHierarchy {
-    /// Create a new key hierarchy for an organization
+    /// Create a new key hierarchy with validated organization ID.
+    ///
+    /// # Arguments
+    /// * `master` - Organization master secret (should be 32+ bytes of entropy)
+    /// * `org_id` - Unique organization identifier
+    ///
+    /// # Errors
+    ///
+    /// Returns `IdError` if the organization ID is invalid.
+    pub fn try_new(master: KeyMaterial, org_id: impl Into<String>) -> Result<Self, IdError> {
+        let org_id = OrgId::try_new(org_id)?;
+        Ok(Self { master, org_id })
+    }
+
+    /// Create a new key hierarchy without validation.
+    ///
+    /// # Warning
+    ///
+    /// This does not validate the organization ID. Prefer `try_new()` for user input.
     ///
     /// # Arguments
     /// * `master` - Organization master secret (should be 32+ bytes of entropy)
@@ -146,7 +324,7 @@ impl KeyHierarchy {
     pub fn new(master: KeyMaterial, org_id: impl Into<String>) -> Self {
         Self {
             master,
-            org_id: org_id.into(),
+            org_id: OrgId::new(org_id),
         }
     }
 
@@ -235,7 +413,7 @@ impl KeyHierarchy {
 
     /// Get the organization ID
     pub fn org_id(&self) -> &str {
-        &self.org_id
+        self.org_id.as_str()
     }
 }
 
@@ -252,7 +430,7 @@ pub struct AgentKeyContext {
     /// Agent ID
     agent_id: AgentId,
     /// Organization ID (for path construction)
-    org_id: String,
+    org_id: OrgId,
 }
 
 impl AgentKeyContext {
@@ -268,7 +446,7 @@ impl AgentKeyContext {
             identity_key,
             org_key,
             agent_id,
-            org_id: hierarchy.org_id().to_string(),
+            org_id: hierarchy.org_id.clone(),
         })
     }
 
@@ -286,13 +464,13 @@ impl AgentKeyContext {
         identity_key: KeyMaterial,
         org_key: KeyMaterial,
         agent_id: AgentId,
-        org_id: String,
+        org_id: impl Into<String>,
     ) -> Self {
         Self {
             identity_key,
             org_key,
             agent_id,
-            org_id,
+            org_id: OrgId::new(org_id),
         }
     }
 
@@ -360,6 +538,108 @@ mod tests {
         // 32 bytes of "entropy" for testing
         KeyMaterial::new(vec![0x42u8; 32])
     }
+
+    // =========================================================================
+    // ID validation tests
+    // =========================================================================
+
+    #[test]
+    fn test_agent_id_try_new_valid() {
+        let id = AgentId::try_new("agent-001").unwrap();
+        assert_eq!(id.as_str(), "agent-001");
+    }
+
+    #[test]
+    fn test_agent_id_try_new_with_underscores() {
+        let id = AgentId::try_new("my_agent_123").unwrap();
+        assert_eq!(id.as_str(), "my_agent_123");
+    }
+
+    #[test]
+    fn test_agent_id_try_new_empty_fails() {
+        let result = AgentId::try_new("");
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            IdError::Empty { kind: "Agent" }
+        ));
+    }
+
+    #[test]
+    fn test_agent_id_try_new_invalid_chars_fails() {
+        // Spaces not allowed
+        let result = AgentId::try_new("agent 001");
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), IdError::InvalidChars { .. }));
+
+        // Special characters not allowed
+        let result = AgentId::try_new("agent@001");
+        assert!(result.is_err());
+
+        // Slashes not allowed (would break path construction)
+        let result = AgentId::try_new("agent/001");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_agent_id_try_new_too_long_fails() {
+        let long_id = "a".repeat(MAX_ID_LENGTH + 1);
+        let result = AgentId::try_new(long_id);
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), IdError::TooLong { .. }));
+    }
+
+    #[test]
+    fn test_org_id_try_new_valid() {
+        let id = OrgId::try_new("acme-corp").unwrap();
+        assert_eq!(id.as_str(), "acme-corp");
+    }
+
+    #[test]
+    fn test_org_id_try_new_empty_fails() {
+        let result = OrgId::try_new("");
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            IdError::Empty {
+                kind: "Organization"
+            }
+        ));
+    }
+
+    #[test]
+    fn test_hierarchy_try_new_validates_org_id() {
+        let result = KeyHierarchy::try_new(test_master(), "");
+        assert!(result.is_err());
+
+        let result = KeyHierarchy::try_new(test_master(), "valid-org");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_id_error_display() {
+        assert_eq!(
+            IdError::Empty { kind: "Agent" }.to_string(),
+            "Agent ID cannot be empty"
+        );
+        assert!(IdError::InvalidChars {
+            kind: "Agent",
+            value: "bad id".to_string()
+        }
+        .to_string()
+        .contains("invalid characters"));
+        assert!(IdError::TooLong {
+            kind: "Agent",
+            len: 200,
+            max: 128
+        }
+        .to_string()
+        .contains("too long"));
+    }
+
+    // =========================================================================
+    // Existing tests (unchanged)
+    // =========================================================================
 
     #[test]
     fn test_hierarchy_creation() {

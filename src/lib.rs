@@ -1,7 +1,7 @@
 //! # M2M Protocol - Machine-to-Machine LLM Communication
 //!
 //! High-performance agent-to-agent protocol for LLM API communication with
-//! intelligent compression, security scanning, and dynamic algorithm routing.
+//! intelligent compression, cryptographic security, and dynamic algorithm routing.
 //!
 //! ## Features
 //!

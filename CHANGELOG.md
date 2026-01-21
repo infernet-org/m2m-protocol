@@ -42,6 +42,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - This prevents catastrophic key recovery attacks from nonce reuse
   - Deterministic nonces now restricted to test builds only (`#[cfg(test)]`)
 - Added nonce generation security documentation (Section 7.8.4)
+- **Guaranteed key zeroization** using `zeroize` crate
+  - Key material is securely cleared from memory on drop
+  - Volatile writes prevent compiler optimization of zeroization
+  - Non-crypto builds use best-effort volatile writes
+- **Key material validation** (`KeyMaterial::try_new()`)
+  - Validates non-empty keys at construction time
+  - `try_new_with_min_length()` for explicit length requirements
+- **Agent and Organization ID validation** (`AgentId::try_new()`, `OrgId::try_new()`)
+  - Validates IDs are non-empty, use valid characters, and respect length limits
+  - Prevents path injection in key derivation paths
+- **Fallible nonce generation** (`SecurityContext::next_nonce() -> Result`)
+  - RNG failures are now properly propagated instead of panicking
+  - Epistemic: I^B (bounded ignorance) properly handled as `Result`
 
 ### Removed
 

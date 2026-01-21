@@ -122,6 +122,7 @@ hmac = { version = "0.12", optional = true }
 chacha20poly1305 = { version = "0.10", optional = true }
 x25519-dalek = { version = "2.0", features = ["static_secrets"], optional = true }
 rand = { version = "0.8", optional = true }
+zeroize = { version = "1.8", features = ["zeroize_derive"], optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
@@ -150,7 +151,7 @@ debug = true
 [features]
 default = []
 # Cryptographic security for M2M wire format (HMAC, AEAD, key exchange)
-crypto = ["dep:hkdf", "dep:sha2", "dep:hmac", "dep:chacha20poly1305", "dep:x25519-dalek", "dep:rand"]
+crypto = ["dep:hkdf", "dep:sha2", "dep:hmac", "dep:chacha20poly1305", "dep:x25519-dalek", "dep:rand", "dep:zeroize"]
 
 # =============================================================================
 # Lints Configuration
