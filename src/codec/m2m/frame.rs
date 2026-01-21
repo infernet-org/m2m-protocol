@@ -326,7 +326,9 @@ impl M2MFrame {
 
         // Generate cryptographically secure random nonce
         #[cfg(feature = "crypto")]
-        let nonce = security_ctx.next_nonce();
+        let nonce = security_ctx
+            .next_nonce()
+            .map_err(|e| M2MError::Compression(format!("Nonce generation failed: {}", e)))?;
         #[cfg(not(feature = "crypto"))]
         let nonce = {
             // Fallback for non-crypto builds (NOT SECURE - testing only)

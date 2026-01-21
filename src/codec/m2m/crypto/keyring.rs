@@ -2,12 +2,35 @@
 //!
 //! Uses HKDF (HMAC-based Key Derivation Function) to derive session keys
 //! from master secrets.
+//!
+//! # Security
+//!
+//! Key material is automatically zeroized when dropped (with the `crypto` feature).
+//! This uses the `zeroize` crate which provides guaranteed memory clearing via
+//! volatile writes that the compiler cannot optimize away.
+//!
+//! # Key Validation
+//!
+//! Use `KeyMaterial::try_new()` for validated key construction:
+//!
+//! ```ignore
+//! use m2m::codec::m2m::crypto::KeyMaterial;
+//!
+//! // Validated construction (recommended)
+//! let key = KeyMaterial::try_new(secret_bytes)?;
+//!
+//! // With minimum length check
+//! let key = KeyMaterial::try_new_with_min_length(bytes, 32)?;
+//! ```
 
 #![allow(missing_docs)]
 
 use std::collections::HashMap;
 use std::fmt;
 use thiserror::Error;
+
+#[cfg(feature = "crypto")]
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// Errors from keyring operations
 #[derive(Debug, Error)]
@@ -23,6 +46,34 @@ pub enum KeyringError {
     /// Key derivation failed
     #[error("Key derivation failed: {0}")]
     DerivationFailed(String),
+}
+
+/// Errors from key material validation.
+///
+/// # Epistemic Classification
+///
+/// All variants represent **B_i falsified** — the caller's belief that
+/// the key material was valid has been proven wrong.
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum KeyError {
+    /// Key material is empty (zero bytes)
+    #[error("Key material is empty")]
+    Empty,
+
+    /// Key material is too short for the intended use
+    #[error("Key too short: got {got} bytes, need at least {min}")]
+    TooShort {
+        /// Actual key length
+        got: usize,
+        /// Minimum required length
+        min: usize,
+    },
+}
+
+impl From<KeyError> for KeyringError {
+    fn from(err: KeyError) -> Self {
+        KeyringError::InvalidKey(err.to_string())
+    }
 }
 
 /// Key identifier (typically a UUID or deterministic ID)
@@ -59,15 +110,97 @@ impl From<String> for KeyId {
     }
 }
 
-/// Key material (secret bytes)
+/// Key material (secret bytes).
+///
+/// # Security
+///
+/// - Key bytes are automatically zeroized on drop (with `crypto` feature)
+/// - Debug output is redacted to prevent accidental logging of secrets
+/// - Clone creates a new copy (both copies will be zeroized independently)
+///
+/// # Epistemic Properties
+///
+/// - **K_i**: Key material exists and is non-empty (enforced by `try_new`)
+/// - **B_i**: Key length is sufficient — use `try_new_with_min_length` for explicit checks
+///
+/// # Construction
+///
+/// Prefer `try_new()` for validated construction:
+///
+/// ```ignore
+/// let key = KeyMaterial::try_new(bytes)?;  // Returns Result
+/// ```
+///
+/// For compatibility, `new()` is still available but does not validate.
 #[derive(Clone)]
+#[cfg_attr(feature = "crypto", derive(Zeroize, ZeroizeOnDrop))]
 pub struct KeyMaterial {
     /// The raw key bytes
     bytes: Vec<u8>,
 }
 
+/// Minimum recommended key size (256 bits / 32 bytes)
+pub const RECOMMENDED_KEY_SIZE: usize = 32;
+
 impl KeyMaterial {
-    /// Create new key material from bytes
+    /// Create new key material from bytes with validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns `KeyError::Empty` if the byte vector is empty.
+    ///
+    /// # Epistemic Properties
+    ///
+    /// - **K_i enforced**: Non-empty key material guaranteed after successful construction
+    pub fn try_new(bytes: Vec<u8>) -> Result<Self, KeyError> {
+        if bytes.is_empty() {
+            return Err(KeyError::Empty);
+        }
+        Ok(Self { bytes })
+    }
+
+    /// Create new key material with minimum length validation.
+    ///
+    /// # Errors
+    ///
+    /// - Returns `KeyError::Empty` if the byte vector is empty.
+    /// - Returns `KeyError::TooShort` if the key is shorter than `min_length`.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // Require at least 32 bytes (256 bits)
+    /// let key = KeyMaterial::try_new_with_min_length(bytes, 32)?;
+    /// ```
+    pub fn try_new_with_min_length(bytes: Vec<u8>, min_length: usize) -> Result<Self, KeyError> {
+        if bytes.is_empty() {
+            return Err(KeyError::Empty);
+        }
+        if bytes.len() < min_length {
+            return Err(KeyError::TooShort {
+                got: bytes.len(),
+                min: min_length,
+            });
+        }
+        Ok(Self { bytes })
+    }
+
+    /// Create new key material from bytes without validation.
+    ///
+    /// # Warning
+    ///
+    /// This does not validate the key material. Prefer `try_new()` for
+    /// user-provided keys. This method is primarily for:
+    ///
+    /// - Internal use (e.g., HKDF output which is always valid)
+    /// - Test code where validation overhead is unnecessary
+    /// - Backward compatibility
+    ///
+    /// # Epistemic Note
+    ///
+    /// Using this method means the caller takes responsibility for ensuring
+    /// the key material is valid. This is a **B_i assumption** that shifts
+    /// responsibility to the caller.
     pub fn new(bytes: Vec<u8>) -> Self {
         Self { bytes }
     }
@@ -75,7 +208,7 @@ impl KeyMaterial {
     /// Create key material from a hex string
     pub fn from_hex(hex: &str) -> Result<Self, KeyringError> {
         let bytes = hex_decode(hex).map_err(|e| KeyringError::InvalidKey(e.to_string()))?;
-        Ok(Self::new(bytes))
+        Self::try_new(bytes).map_err(KeyringError::from)
     }
 
     /// Get the key bytes
@@ -105,6 +238,7 @@ impl KeyMaterial {
         hk.expand(info, &mut okm)
             .map_err(|e| KeyringError::DerivationFailed(format!("HKDF expand failed: {}", e)))?;
 
+        // HKDF output is always valid, so we can use new() directly
         Ok(KeyMaterial::new(okm))
     }
 
@@ -126,12 +260,23 @@ impl fmt::Debug for KeyMaterial {
     }
 }
 
+// Note: Drop is handled by ZeroizeOnDrop derive when crypto feature is enabled.
+// For non-crypto builds, we provide a manual implementation.
+#[cfg(not(feature = "crypto"))]
 impl Drop for KeyMaterial {
+    #[allow(unsafe_code)] // Required for volatile write in manual zeroization
     fn drop(&mut self) {
-        // Zeroize key material on drop
+        // Best-effort zeroization without zeroize crate.
+        // WARNING: Compiler may optimize this away. Use crypto feature for guaranteed zeroization.
         for byte in &mut self.bytes {
-            *byte = 0;
+            // Use volatile write semantics via ptr::write_volatile
+            // This is still not as robust as the zeroize crate
+            unsafe {
+                std::ptr::write_volatile(byte, 0);
+            }
         }
+        // Memory barrier to prevent reordering
+        std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst);
     }
 }
 
@@ -256,6 +401,64 @@ fn hex_char_to_nibble(c: u8) -> Result<u8, &'static str> {
 mod tests {
     use super::*;
 
+    // =========================================================================
+    // KeyMaterial validation tests
+    // =========================================================================
+
+    #[test]
+    fn test_key_material_try_new_valid() {
+        let key = KeyMaterial::try_new(vec![1, 2, 3, 4]).unwrap();
+        assert_eq!(key.len(), 4);
+        assert_eq!(key.as_bytes(), &[1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn test_key_material_try_new_empty_fails() {
+        let result = KeyMaterial::try_new(vec![]);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), KeyError::Empty);
+    }
+
+    #[test]
+    fn test_key_material_try_new_with_min_length_valid() {
+        let key = KeyMaterial::try_new_with_min_length(vec![0u8; 32], 32).unwrap();
+        assert_eq!(key.len(), 32);
+    }
+
+    #[test]
+    fn test_key_material_try_new_with_min_length_too_short() {
+        let result = KeyMaterial::try_new_with_min_length(vec![0u8; 16], 32);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), KeyError::TooShort { got: 16, min: 32 });
+    }
+
+    #[test]
+    fn test_key_material_try_new_with_min_length_empty() {
+        let result = KeyMaterial::try_new_with_min_length(vec![], 32);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), KeyError::Empty);
+    }
+
+    #[test]
+    fn test_key_error_display() {
+        assert_eq!(KeyError::Empty.to_string(), "Key material is empty");
+        assert_eq!(
+            KeyError::TooShort { got: 16, min: 32 }.to_string(),
+            "Key too short: got 16 bytes, need at least 32"
+        );
+    }
+
+    #[test]
+    fn test_key_error_to_keyring_error() {
+        let key_err = KeyError::Empty;
+        let keyring_err: KeyringError = key_err.into();
+        assert!(matches!(keyring_err, KeyringError::InvalidKey(_)));
+    }
+
+    // =========================================================================
+    // Existing tests (unchanged)
+    // =========================================================================
+
     #[test]
     fn test_key_material_from_hex() {
         let key = KeyMaterial::from_hex("0123456789abcdef").unwrap();
@@ -264,6 +467,12 @@ mod tests {
             key.as_bytes(),
             &[0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef]
         );
+    }
+
+    #[test]
+    fn test_key_material_from_hex_empty_fails() {
+        let result = KeyMaterial::from_hex("");
+        assert!(result.is_err());
     }
 
     #[test]

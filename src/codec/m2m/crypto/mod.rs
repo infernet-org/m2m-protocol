@@ -101,13 +101,17 @@ mod hierarchy;
 
 pub use aead::{AeadCipher, AeadError};
 pub use hmac_auth::{HmacAuth, HmacError};
-pub use keyring::{KeyId, KeyMaterial, Keyring, KeyringError};
+pub use keyring::{KeyError, KeyId, KeyMaterial, Keyring, KeyringError, RECOMMENDED_KEY_SIZE};
 
 #[cfg(feature = "crypto")]
 pub use exchange::{KeyExchange, KeyPair};
 
 #[cfg(feature = "crypto")]
-pub use hierarchy::{AgentId, AgentKeyContext, KeyHierarchy, KeyPurpose};
+pub use hierarchy::{
+    AgentId, AgentKeyContext, IdError, KeyHierarchy, KeyPurpose, OrgId, MAX_ID_LENGTH,
+};
+
+use thiserror::Error;
 
 /// Nonce size for ChaCha20-Poly1305 (96 bits)
 pub const NONCE_SIZE: usize = 12;
@@ -120,6 +124,24 @@ pub const HMAC_TAG_SIZE: usize = 32;
 
 /// Minimum key size (256 bits)
 pub const MIN_KEY_SIZE: usize = 32;
+
+/// Errors from nonce generation.
+///
+/// # Epistemic Classification
+///
+/// - `RngFailure`: I^B (bounded ignorance) — we cannot know at compile time
+///   whether the system CSPRNG will be available/working at runtime.
+#[derive(Debug, Error)]
+pub enum NonceError {
+    /// System CSPRNG failed to generate random bytes.
+    ///
+    /// This is extremely rare on supported platforms but can occur if:
+    /// - System entropy pool is exhausted (very unlikely)
+    /// - Running in a restricted environment without RNG access
+    /// - Hardware RNG failure
+    #[error("CSPRNG failure: {0}")]
+    RngFailure(String),
+}
 
 /// Security context for frame operations.
 ///
@@ -172,16 +194,24 @@ impl SecurityContext {
     /// for ChaCha20-Poly1305 as it avoids nonce-reuse vulnerabilities
     /// that can occur with counter-based schemes after process restarts.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if the system CSPRNG fails (should never happen on supported platforms).
+    /// Returns `NonceError::RngFailure` if the system CSPRNG fails.
+    /// This is extremely rare on supported platforms.
+    ///
+    /// # Epistemic Properties
+    ///
+    /// - **I^B**: RNG availability is bounded ignorance — cannot be known at compile time
+    /// - **B_i**: Caller believes RNG will succeed, `Result` handles the case when wrong
     #[cfg(feature = "crypto")]
-    pub fn next_nonce(&mut self) -> [u8; NONCE_SIZE] {
+    pub fn next_nonce(&mut self) -> Result<[u8; NONCE_SIZE], NonceError> {
         use rand::RngCore;
 
         let mut nonce = [0u8; NONCE_SIZE];
-        rand::thread_rng().fill_bytes(&mut nonce);
-        nonce
+        rand::thread_rng()
+            .try_fill_bytes(&mut nonce)
+            .map_err(|e| NonceError::RngFailure(e.to_string()))?;
+        Ok(nonce)
     }
 
     /// Generate a deterministic nonce for testing purposes only.
@@ -233,7 +263,7 @@ mod tests {
         // Generate many nonces and verify they're all unique
         let mut nonces = std::collections::HashSet::new();
         for _ in 0..1000 {
-            let nonce = ctx.next_nonce();
+            let nonce = ctx.next_nonce().expect("RNG should not fail in tests");
             assert!(
                 nonces.insert(nonce),
                 "Random nonce collision detected (extremely unlikely)"
@@ -248,7 +278,7 @@ mod tests {
         let mut ctx = SecurityContext::new(key);
 
         // Verify nonces aren't all zeros or trivial patterns
-        let nonce = ctx.next_nonce();
+        let nonce = ctx.next_nonce().expect("RNG should not fail in tests");
         let zeros: [u8; NONCE_SIZE] = [0u8; NONCE_SIZE];
         assert_ne!(nonce, zeros, "Random nonce should not be all zeros");
 
