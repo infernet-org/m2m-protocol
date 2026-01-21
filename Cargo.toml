@@ -130,6 +130,8 @@ tokio-test = "0.4"
 tempfile = "3.0"
 hex-literal = "0.4"  # For RFC test vectors
 rand_chacha = "0.3"  # Deterministic RNG for testing
+dotenvy = "0.15"     # Load .env for integration tests
+proptest = "1.5"     # Property-based testing
 
 [build-dependencies]
 phf_codegen = "0.11"
