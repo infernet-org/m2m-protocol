@@ -27,6 +27,10 @@ path = "src/bin/benchmark.rs"
 name = "m2m-ai-test"
 path = "src/bin/m2m_ai_test.rs"
 
+[[bin]]
+name = "agent-town"
+path = "src/bin/agent_town.rs"
+
 [dependencies]
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -98,6 +102,9 @@ chrono = { version = "0.4", features = ["serde"] }
 # Regex for pattern matching (security)
 regex = { version = "1.0", features = ["perf"] }
 lazy_static = "1.4"
+
+# Graph data structures for network topology
+petgraph = "0.7"
 
 # === QUIC Transport ===
 # QUIC implementation (using quinn 0.10 for h3-quinn compatibility)
