@@ -30,6 +30,7 @@ path = "src/bin/m2m_ai_test.rs"
 [[bin]]
 name = "agent-town"
 path = "src/bin/agent_town.rs"
+required-features = ["crypto"]
 
 [dependencies]
 # Serialization
