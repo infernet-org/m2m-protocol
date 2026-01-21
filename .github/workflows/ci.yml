@@ -78,3 +78,48 @@ jobs:
 
       - name: Run audit
         run: cargo deny check
+
+  agent-town:
+    name: Agent Town Smoke Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build agent-town
+        run: cargo build --bin agent-town --features crypto --release
+
+      - name: "Smoke: dry-run basic"
+        run: |
+          cargo run --bin agent-town --features crypto --release -- \
+            --dry-run --agents 10 --rounds 5 --verbose
+
+      - name: "Smoke: output modes"
+        run: |
+          cargo run --bin agent-town --features crypto --release -- \
+            --dry-run --agents 5 --rounds 3 --output-mode compact
+          cargo run --bin agent-town --features crypto --release -- \
+            --dry-run --agents 5 --rounds 3 --output-mode transcript
+
+      - name: "Smoke: topologies"
+        run: |
+          cargo run --bin agent-town --features crypto --release -- \
+            --dry-run --agents 10 --rounds 3 --topology random
+          cargo run --bin agent-town --features crypto --release -- \
+            --dry-run --agents 10 --rounds 3 --topology ring
+
+      - name: "Smoke: exports"
+        run: |
+          cargo run --bin agent-town --features crypto --release -- \
+            --dry-run --agents 5 --rounds 3 \
+            --output /tmp/results.json \
+            --transcript /tmp/transcript.txt \
+            --export-graph /tmp/graph.dot
+          test -f /tmp/results.json
+          test -f /tmp/transcript.txt
+          test -f /tmp/graph.dot
