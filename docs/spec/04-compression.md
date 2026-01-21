@@ -1,447 +1,284 @@
 ---
 title: Compression
-description: Compression algorithms and key/value mappings
+description: Compression algorithms and selection heuristics
 ---
 
 # 5. Compression Algorithms
 
 ## 5.1 Overview
 
-M2M Protocol supports multiple compression algorithms optimized for different content types.
+M2M Protocol supports multiple compression algorithms optimized for LLM API traffic.
 
-| Algorithm | Tag | Best For | Typical Savings |
-|-----------|-----|----------|-----------------|
-| TokenNative | `TK` | Small-medium LLM API (<1KB) | ~30% wire, ~50% raw |
-| Token | `T1` | Human-readable debugging | 5-20% bytes |
-| Brotli | `BR` | Large content (>1KB) | 60-90% |
-| Dictionary | `DI` | Repetitive patterns | 20-30% |
-| None | - | Small content (<100B) | 0% |
+| Algorithm | Prefix | Best For | Typical Savings |
+|-----------|--------|----------|-----------------|
+| **M2M v1** (default) | `#M2M\|1\|` | All LLM API payloads | 40-70% |
+| TokenNative | `#TK\|` | Small payloads, token-sensitive | 30-50% |
+| Brotli | `#M2M[v3.0]\|DATA:` | Large content (>1KB) | 60-80% |
+| None | (passthrough) | Very small content (<100B) | 0% |
 
-## 5.2 Algorithm Selection
+## 5.2 M2M v1 Compression (Default)
 
-### 5.2.1 Automatic Selection
+### 5.2.1 Overview
 
-Implementations SHOULD select algorithms based on:
+M2M v1 is the primary compression algorithm, designed for LLM API payloads. It combines:
 
-1. **Content size**: Small content (<100 bytes) → None
-2. **Content type**: JSON with LLM keys → TokenNative (preferred) or Token
-3. **Content size threshold**: Large content (>1KB) → Brotli
-4. **Token sensitivity**: API-bound, small-medium → TokenNative preferred
+1. **Binary headers**: Routing metadata in compact binary format
+2. **Brotli payload**: JSON payload compressed with Brotli
+3. **100% fidelity**: Original JSON fully recoverable
 
-### 5.2.2 Selection Heuristics
+### 5.2.2 Architecture
 
 ```
-if content_size < 100:
-    return None
-elif is_llm_api_payload(content):
-    if content_size < 1024:
-        return TokenNative  # Best for M2M token efficiency
-    elif content_size > 1024 and repetition_ratio > 0.3:
-        return Brotli
-    else:
-        return TokenNative
-else:
-    if content_size > 1024:
-        return Brotli
-    else:
-        return TokenNative
+┌─────────────────────────────────────────────────────────────────┐
+│                        M2M v1 ENCODING                          │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  Input JSON                                                      │
+│      │                                                           │
+│      ├─► Extract routing metadata ─► Binary routing header       │
+│      │   (model, msg_count, roles)                               │
+│      │                                                           │
+│      └─► Brotli compress ─────────► Compressed payload           │
+│                                                                  │
+│  Output: #M2M|1|<fixed_header><routing_header><payload>         │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-## 5.3 Token Compression (Algorithm T1)
+### 5.2.3 Routing Metadata Extraction
+
+The following fields are extracted to the routing header (readable without decompression):
+
+| Field | Source | Purpose |
+|-------|--------|---------|
+| `model` | `$.model` | Load balancing, cost attribution |
+| `msg_count` | `$.messages.length` | Analytics, rate limiting |
+| `roles` | `$.messages[*].role` | Conversation analysis |
+| `content_hint` | Sum of content lengths | Size estimation |
+| `max_tokens` | `$.max_tokens` | Resource planning |
+| `cost_estimate` | Calculated | Billing preview |
+
+### 5.2.4 Compression Ratios
+
+| Content Type | Original | Compressed | Savings |
+|--------------|----------|------------|---------|
+| Simple request | 147 B | 60 B | 59% |
+| Multi-turn conversation | 2.4 KB | 1.0 KB | 58% |
+| Tool calls + schema | 8.2 KB | 3.5 KB | 57% |
+| Large context (32K tokens) | 128 KB | 48 KB | 62% |
+
+### 5.2.5 When to Use
+
+M2M v1 is the **default algorithm** for all LLM API payloads. Use it unless:
+- Content is too small (<100 bytes) → passthrough
+- Binary-safe channel available and need maximum compression → TokenNative binary mode
+
+## 5.3 TokenNative Compression
 
 ### 5.3.1 Overview
 
-Token compression applies semantic abbreviation to JSON keys, values, and model names. The goal is to reduce token count, not just byte count.
+TokenNative transmits BPE token IDs directly, using the tokenizer vocabulary as a compression dictionary. This achieves 30-50% compression on the wire.
 
-### 5.3.2 Key Abbreviation
-
-Keys are abbreviated to single characters or short sequences.
-
-**Request Keys:**
-
-| Original | Abbreviated | Tokens Saved |
-|----------|-------------|--------------|
-| `messages` | `m` | 1 |
-| `content` | `c` | 1 |
-| `role` | `r` | 1 |
-| `model` | `M` | 1 |
-| `temperature` | `T` | 2 |
-| `max_tokens` | `x` | 2 |
-| `top_p` | `p` | 2 |
-| `stream` | `s` | 1 |
-| `stop` | `S` | 1 |
-| `frequency_penalty` | `f` | 3 |
-| `presence_penalty` | `P` | 3 |
-| `logit_bias` | `lb` | 2 |
-| `user` | `u` | 1 |
-| `n` | `n` | 0 |
-| `seed` | `se` | 1 |
-| `tools` | `ts` | 1 |
-| `tool_choice` | `tc` | 2 |
-| `function_call` | `fc` | 3 |
-| `functions` | `fs` | 2 |
-| `response_format` | `rf` | 3 |
-
-**Response Keys:**
-
-| Original | Abbreviated | Tokens Saved |
-|----------|-------------|--------------|
-| `choices` | `C` | 1 |
-| `index` | `i` | 1 |
-| `message` | `m` | 1 |
-| `finish_reason` | `fr` | 3 |
-| `usage` | `U` | 1 |
-| `prompt_tokens` | `pt` | 2 |
-| `completion_tokens` | `ct` | 3 |
-| `total_tokens` | `tt` | 2 |
-| `delta` | `d` | 1 |
-| `logprobs` | `lp` | 2 |
-
-**Tool Keys:**
-
-| Original | Abbreviated |
-|----------|-------------|
-| `tool_calls` | `tc` |
-| `function` | `fn` |
-| `name` | `n` |
-| `arguments` | `a` |
-| `type` | `t` |
-
-### 5.3.3 Value Abbreviation
-
-Common string values are abbreviated.
-
-**Role Values:**
-
-| Original | Abbreviated |
-|----------|-------------|
-| `system` | `s` |
-| `user` | `u` |
-| `assistant` | `a` |
-| `function` | `f` |
-| `tool` | `t` |
-
-**Finish Reason Values:**
-
-| Original | Abbreviated |
-|----------|-------------|
-| `stop` | `s` |
-| `length` | `l` |
-| `tool_calls` | `tc` |
-| `content_filter` | `cf` |
-| `function_call` | `fc` |
-
-### 5.3.4 Model Abbreviation
-
-Model identifiers are abbreviated by provider.
-
-**OpenAI Models:**
-
-| Original | Abbreviated |
-|----------|-------------|
-| `gpt-4o` | `4o` |
-| `gpt-4o-mini` | `4om` |
-| `gpt-4-turbo` | `4t` |
-| `gpt-4` | `4` |
-| `gpt-3.5-turbo` | `35t` |
-| `o1` | `o1` |
-| `o1-mini` | `o1m` |
-| `o1-preview` | `o1p` |
-| `o3` | `o3` |
-| `o3-mini` | `o3m` |
-
-**Meta Llama Models:**
-
-| Original | Abbreviated |
-|----------|-------------|
-| `meta-llama/llama-3.3-70b` | `ml3370` |
-| `meta-llama/llama-3.1-405b` | `ml31405` |
-| `meta-llama/llama-3.1-70b` | `ml3170` |
-| `meta-llama/llama-3.1-8b` | `ml318` |
-
-**Mistral Models:**
-
-| Original | Abbreviated |
-|----------|-------------|
-| `mistralai/mistral-large` | `mim-l` |
-| `mistralai/mistral-small` | `mim-s` |
-| `mistralai/mixtral-8x7b` | `mimx87` |
-
-### 5.3.5 Default Value Omission
-
-Parameters matching default values MAY be omitted.
-
-| Parameter | Default | Omit When |
-|-----------|---------|-----------|
-| `temperature` | `1.0` | Equal to 1.0 |
-| `top_p` | `1.0` | Equal to 1.0 |
-| `n` | `1` | Equal to 1 |
-| `stream` | `false` | Equal to false |
-| `frequency_penalty` | `0` | Equal to 0 |
-| `presence_penalty` | `0` | Equal to 0 |
-| `logit_bias` | `{}` | Empty object |
-| `stop` | `null` | Null |
-
-Implementations:
-- MUST restore omitted parameters during decompression
-- MUST preserve non-default values exactly
-- SHOULD NOT omit if value differs from default
-
-### 5.3.6 Compression Algorithm
+### 5.3.2 How It Works
 
 ```
-function compress_token(json):
-    obj = parse_json(json)
-    obj = abbreviate_keys(obj, KEY_MAP)
-    obj = abbreviate_values(obj, VALUE_MAP)
-    obj = abbreviate_model(obj)
-    obj = omit_defaults(obj)
-    return "#T1|" + serialize_json(obj)
-
-function decompress_token(wire):
-    payload = strip_prefix(wire, "#T1|")
-    obj = parse_json(payload)
-    obj = expand_keys(obj, KEY_MAP)
-    obj = expand_values(obj, VALUE_MAP)
-    obj = expand_model(obj)
-    obj = restore_defaults(obj)
-    return serialize_json(obj)
+Input:  "Hello, world!"
+         │
+         ▼
+Tokenize: [15496, 11, 995, 0]  (4 tokens)
+         │
+         ▼
+VarInt:   [0xE8, 0x78, 0x0B, 0xE3, 0x07, 0x00]  (6 bytes)
+         │
+         ▼
+Base64:   "6HgL4wcA"  (8 characters)
+         │
+         ▼
+Output:   "#TK|C|6HgL4wcA"
 ```
 
-### 5.3.7 Example
+### 5.3.3 Supported Tokenizers
 
-**Original (68 bytes, ~42 tokens):**
-```json
-{"model":"gpt-4o","messages":[{"role":"user","content":"Hello"}],"temperature":1.0,"stream":false}
-```
-
-**Compressed (45 bytes, ~29 tokens):**
-```
-#T1|{"M":"4o","m":[{"r":"u","c":"Hello"}]}
-```
-
-**Savings:** 34% bytes, 31% tokens
-
-## 5.4 TokenNative Compression (Algorithm TK)
-
-### 5.4.1 Overview
-
-TokenNative compression transmits BPE token IDs directly instead of text. The tokenizer vocabulary serves as the compression dictionary, achieving 50-60% compression on raw bytes.
-
-Unlike Token compression (T1) which abbreviates keys, TokenNative converts the entire content to token IDs, providing maximum compression for M2M communication where both endpoints share the same tokenizer.
-
-### 5.4.2 Wire Format
-
-```
-#TK|<tokenizer_id>|<base64_varint_tokens>
-```
-
-**Components:**
-- `#TK|` - Algorithm prefix (4 bytes)
-- `<tokenizer_id>` - Single character: `C` (cl100k), `O` (o200k), `L` (llama)
-- `|` - Separator
-- `<base64_varint_tokens>` - Base64-encoded VarInt token IDs
-
-### 5.4.3 Supported Tokenizers
-
-| ID | Tokenizer | Vocabulary Size | Models |
-|----|-----------|-----------------|--------|
+| ID | Tokenizer | Vocabulary | Use With |
+|----|-----------|------------|----------|
 | `C` | cl100k_base | 100,256 | GPT-3.5, GPT-4 (canonical fallback) |
 | `O` | o200k_base | 200,019 | GPT-4o, o1, o3 |
 | `L` | Llama BPE | 128,256 | Llama 3, Mistral |
 
-### 5.4.4 VarInt Encoding
+Implementations MUST support `C` (cl100k_base) as the canonical fallback.
 
-Token IDs are encoded using variable-length integers:
+### 5.3.4 VarInt Encoding
 
-| Value Range | Bytes | Encoding |
-|-------------|-------|----------|
+Token IDs are encoded as variable-length integers to minimize size:
+
+| Value Range | Bytes | Format |
+|-------------|-------|--------|
 | 0-127 | 1 | `0xxxxxxx` |
 | 128-16383 | 2 | `1xxxxxxx 0xxxxxxx` |
-| 16384+ | 3+ | Continuation bits |
+| 16384-2097151 | 3 | `1xxxxxxx 1xxxxxxx 0xxxxxxx` |
 
-Average encoding: ~1.5 bytes per token for typical vocabularies.
+Average: ~1.5 bytes per token for typical vocabularies.
 
-### 5.4.5 Binary Format
+### 5.3.5 Binary Mode
 
-For binary-safe channels (WebSocket binary, QUIC), skip Base64:
-
-```
-<tokenizer_byte><varint_tokens>
-```
-
-- Byte 0: Tokenizer ID (0=cl100k, 1=o200k, 2=llama)
-- Bytes 1+: Raw VarInt-encoded token IDs
-
-This achieves ~50% compression (vs ~75% with Base64 overhead).
-
-### 5.4.6 Compression Algorithm
+For binary-safe channels (WebSocket binary frames, QUIC streams), skip Base64:
 
 ```
-function compress_token_native(text, encoding):
-    tokens = tokenize(text, encoding)
-    varint_bytes = varint_encode(tokens)
-    base64_data = base64_encode(varint_bytes)
-    return "#TK|" + encoding_id(encoding) + "|" + base64_data
-
-function decompress_token_native(wire):
-    parts = parse_wire(wire)  # ["#TK", tokenizer_id, base64_data]
-    encoding = encoding_from_id(parts[1])
-    varint_bytes = base64_decode(parts[2])
-    tokens = varint_decode(varint_bytes)
-    return detokenize(tokens, encoding)
+Binary: <tokenizer_byte><varint_tokens>
 ```
 
-### 5.4.7 Compression Ratios
+This achieves ~50% compression (vs ~35% with Base64 overhead).
 
-| Content Type | Original | Compressed | Ratio |
-|--------------|----------|------------|-------|
-| Small JSON (<200B) | 200 bytes | 80 bytes | 60% |
-| Medium JSON (~1KB) | 1,024 bytes | 450 bytes | 56% |
-| Large JSON (~10KB) | 10,240 bytes | 4,600 bytes | 55% |
+### 5.3.6 When to Use
 
-### 5.4.8 When to Use
+- Small-to-medium payloads (<1KB)
+- Both endpoints support same tokenizer
+- Maximum token efficiency required
+- Binary channel available (for best compression)
 
-- **Prefer TokenNative** for:
-  - Small-to-medium LLM API payloads (<1KB)
-  - M2M communication where both endpoints support it
-  - Maximum token efficiency
-
-- **Prefer Brotli** for:
-  - Large content (>1KB)
-  - Highly repetitive content
-  - Non-LLM content
-
-### 5.4.9 Example
-
-**Original (68 bytes):**
-```json
-{"model":"gpt-4o","messages":[{"role":"user","content":"Hello"}]}
-```
-
-**TokenNative Wire (~40 bytes):**
-```
-#TK|C|W3sib29kZWwiOiJncHQ...
-```
-
-**Savings:** 41% bytes, same semantic content
-
-## 5.5 Brotli Compression (Algorithm BR)
+## 5.4 Brotli Compression
 
 ### 5.4.1 Overview
 
-Brotli compression is used for large content where byte reduction outweighs Base64 token overhead.
+Brotli compression with Base64 encoding, for large content where byte reduction outweighs Base64 overhead.
 
 ### 5.4.2 Encoding
 
-1. Compress content using Brotli (quality level 4-6)
-2. Encode compressed bytes as Base64
-3. Prepend `#BR|` prefix
+```
+Input JSON ─► Brotli compress (quality 4-6) ─► Base64 encode ─► #M2M[v3.0]|DATA:<base64>
+```
 
 ### 5.4.3 When to Use
 
-- Content size > 4096 bytes
+- Content size > 1KB
 - High repetition (>30% duplicate substrings)
 - Non-LLM API content
+- Legacy compatibility
 
-### 5.4.4 Example
+### 5.4.4 Compression Ratios
 
-**Original (large JSON):**
-```json
-{"messages":[{"role":"user","content":"...10KB of text..."}]}
+| Content Type | Original | Compressed | Savings |
+|--------------|----------|------------|---------|
+| Large JSON | 10 KB | 4 KB | 60% |
+| Highly repetitive | 10 KB | 2 KB | 80% |
+| Mixed content | 10 KB | 5 KB | 50% |
+
+## 5.5 Algorithm Selection
+
+### 5.5.1 Automatic Selection (Recommended)
+
+```rust
+let result = engine.compress_auto(json)?;
 ```
 
-**Compressed:**
-```
-#BR|G6kEABwHcNP2Yk9N...base64...
-```
+The engine selects the optimal algorithm based on content analysis.
 
-## 5.6 Dictionary Compression (Algorithm DI)
-
-### 5.5.1 Overview
-
-Dictionary compression encodes common JSON patterns as single bytes.
-
-### 5.5.2 Pattern Table
-
-| Pattern | Code |
-|---------|------|
-| `{"role":"user","content":"` | `0x80` |
-| `{"role":"assistant","content":"` | `0x81` |
-| `{"role":"system","content":"` | `0x82` |
-| `"}` | `0x83` |
-| `"},` | `0x84` |
-| `"}]` | `0x85` |
-| `{"messages":[` | `0x86` |
-| `{"model":"` | `0x87` |
-
-### 5.5.3 Encoding
-
-Patterns in the 0x80-0xFF byte range are reserved for dictionary codes.
-
-## 5.7 No Compression
-
-### 5.6.1 When to Use
-
-- Content size < 100 bytes
-- Already compressed content
-- Binary content that cannot be JSON-encoded
-
-### 5.6.2 Wire Format
-
-Content is passed through without prefix modification.
-
-## 5.8 Algorithm Negotiation
-
-During session establishment, endpoints negotiate supported algorithms and encodings:
-
-1. Client sends list of supported algorithms and encodings in HELLO
-2. Server responds with intersection in ACCEPT
-3. Subsequent DATA messages use any negotiated algorithm
-
-For TokenNative, encoding negotiation ensures both endpoints use the same tokenizer:
+### 5.5.2 Selection Heuristics
 
 ```
-Client capabilities:
-  algorithms: [TOKEN_NATIVE, TOKEN, BROTLI]
+if content_size < 100:
+    return None (passthrough)
+
+if is_llm_api_payload(content):
+    return M2M_V1  # Default for all LLM API traffic
+
+if content_size > 1024 and high_repetition:
+    return Brotli
+
+return M2M_V1
+```
+
+### 5.5.3 Explicit Selection
+
+```rust
+// Force specific algorithm
+let result = engine.compress(json, Algorithm::M2M)?;
+let result = engine.compress(json, Algorithm::TokenNative)?;
+let result = engine.compress(json, Algorithm::Brotli)?;
+```
+
+### 5.5.4 ML-Assisted Selection (Hydra)
+
+```rust
+// Use Hydra model for intelligent selection
+let result = engine.compress_with_hydra(json)?;
+```
+
+The Hydra MoE model analyzes content to select the optimal algorithm.
+
+## 5.6 Algorithm Negotiation
+
+During session establishment, endpoints negotiate supported algorithms:
+
+```
+Client HELLO:
+  algorithms: [M2M, TOKEN_NATIVE, BROTLI]
   encodings: [CL100K_BASE, O200K_BASE]
-  preferred_encoding: O200K_BASE
 
-Server capabilities:
-  algorithms: [TOKEN_NATIVE, BROTLI]
-  encodings: [CL100K_BASE]
-  preferred_encoding: CL100K_BASE
-
-Negotiated:
-  algorithms: [TOKEN_NATIVE, BROTLI]
-  encoding: CL100K_BASE  (intersection, fallback to canonical)
+Server ACCEPT:
+  algorithms: [M2M, BROTLI]  # Intersection
+  encoding: CL100K_BASE      # Agreed tokenizer
 ```
 
-For stateless mode, the prefix indicates the algorithm and encoding used.
+For stateless mode, the prefix indicates the algorithm used.
 
-## 5.9 Decompression
+## 5.7 Decompression
 
-### 5.9.1 Algorithm Detection
+### 5.7.1 Algorithm Detection
 
 Implementations MUST detect algorithm from prefix:
 
-```
-if starts_with("#TK|"):
-    return decompress_token_native(content)
-elif starts_with("#T1|"):
-    return decompress_token(content)
-elif starts_with("#BR|"):
-    return decompress_brotli(content)
-elif starts_with("#DI|"):
-    return decompress_dictionary(content)
-else:
-    return content  # No compression
+```rust
+match content {
+    s if s.starts_with("#M2M|1|") => decompress_m2m_v1(s),
+    s if s.starts_with("#TK|") => decompress_token_native(s),
+    s if s.starts_with("#M2M[v3.0]|DATA:") => decompress_brotli(s),
+    _ => Ok(content.to_string()),  // Passthrough
+}
 ```
 
-### 5.9.2 Error Handling
+### 5.7.2 Error Handling
 
-- Invalid prefix → return error
-- Decompression failure → return error
-- Invalid JSON after decompression → return error
+- Invalid prefix → `InvalidCodec` error
+- Decompression failure → `Decompression` error  
+- Invalid JSON after decompression → `Decompression` error
 
 Implementations MUST NOT return partially decompressed content.
+
+## 5.8 Deprecated Algorithms
+
+### 5.8.1 Token v1 (`#T1|`) - REMOVED
+
+The Token v1 algorithm used semantic key abbreviation:
+
+```
+Original: {"model":"gpt-4o","messages":[{"role":"user","content":"Hi"}]}
+Token v1: #T1|{"M":"4o","m":[{"r":"u","c":"Hi"}]}
+```
+
+**Status:** Removed in v0.4.0. Use M2M v1 instead.
+
+### 5.8.2 Dictionary (`#DI|`) - DEPRECATED
+
+Pattern-based dictionary encoding is deprecated in favor of M2M v1.
+
+### 5.8.3 Zlib (`#M2M[v2.0]|DATA:`) - DEPRECATED
+
+Replaced by Brotli (`#M2M[v3.0]|DATA:`).
+
+## 5.9 Compression Comparison
+
+| Algorithm | Wire Size | Decode Speed | Headers Readable | Binary Safe |
+|-----------|-----------|--------------|------------------|-------------|
+| **M2M v1** | 40-70% | Fast | Yes | Yes |
+| TokenNative | 50-70% | Fast | No | Yes (binary mode) |
+| Brotli | 40-60% | Medium | No | No (Base64) |
+| None | 100% | Instant | Yes | Yes |
+
+## 5.10 Best Practices
+
+1. **Use M2M v1 by default** for all LLM API payloads
+2. **Use automatic selection** unless you have specific requirements
+3. **Negotiate capabilities** in session mode for optimal compression
+4. **Fall back gracefully** to passthrough for unknown content
+5. **Validate decompressed JSON** before processing

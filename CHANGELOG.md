@@ -81,6 +81,14 @@ let result = engine.compress(content, Algorithm::Brotli)?;   // High compression
 let result = engine.compress(content, Algorithm::TokenNative)?; // Token ID transmission
 ```
 
+### Documentation
+
+- **Wire Format Spec** (`docs/spec/02-wire-format.md`): Complete rewrite to document actual M2M binary format (`#M2M|1|`), header structure, and legacy format detection
+- **Compression Spec** (`docs/spec/04-compression.md`): Updated to reflect M2M as primary algorithm, Token removal, and migration guidance
+- **Error Reference** (`docs/reference/error-codes.md`): Complete rewrite with all `M2MError` variants, new `CryptoError` unified type, and epistemic classification
+- **Security Spec** (`docs/spec/06-security.md`): Updated zeroization example to use `zeroize` crate, added Section 7.9 Error Handling
+- Fixed spec/implementation drift identified via epistemic systems analysis
+
 ### Backwards Compatibility
 
 - **Reading old data**: Wire formats `#TK|`, `#DC|`, `#ZL|`, `#M3|` can still be decompressed
