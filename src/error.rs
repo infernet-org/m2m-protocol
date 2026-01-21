@@ -1,6 +1,20 @@
 //! M2M Protocol error types.
+//!
+//! # Epistemic Error Classification
+//!
+//! M2M errors follow epistemic principles:
+//!
+//! - **B_i falsified**: Most errors indicate a runtime belief was proven wrong
+//!   (invalid input, network failure, etc.)
+//! - **I^B handling**: Errors from bounded ignorance (RNG availability, network state)
+//!   are wrapped as `Result` rather than panicking
+//!
+//! The `Crypto` variant preserves the full error chain via `#[source]`,
+//! enabling debugging tools to display complete error context.
 
 use thiserror::Error;
+
+use crate::codec::m2m::crypto::CryptoError;
 
 /// M2M Protocol errors.
 #[derive(Error, Debug)]
@@ -90,6 +104,18 @@ pub enum M2MError {
     #[error("Tokenizer error: {0}")]
     Tokenizer(String),
 
+    /// Cryptographic operation failed.
+    ///
+    /// This variant preserves the full error chain via `#[source]`,
+    /// enabling tools like `anyhow` to display the complete context.
+    ///
+    /// # Epistemic Classification
+    ///
+    /// Crypto errors represent B_i falsified (invalid keys, auth failures)
+    /// or I^B handling (RNG failures).
+    #[error("Crypto error: {0}")]
+    Crypto(#[source] CryptoError),
+
     /// JSON serialization/deserialization error.
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
@@ -101,6 +127,12 @@ pub enum M2MError {
 
 /// Result type alias for M2M operations
 pub type Result<T> = std::result::Result<T, M2MError>;
+
+impl From<CryptoError> for M2MError {
+    fn from(err: CryptoError) -> Self {
+        M2MError::Crypto(err)
+    }
+}
 
 impl From<reqwest::Error> for M2MError {
     fn from(err: reqwest::Error) -> Self {

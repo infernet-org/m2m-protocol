@@ -90,6 +90,7 @@
 //! See `keyring::rfc5869_tests` and `hierarchy::tests` for details.
 
 mod aead;
+mod error;
 mod hmac_auth;
 mod keyring;
 
@@ -100,6 +101,7 @@ mod exchange;
 mod hierarchy;
 
 pub use aead::{AeadCipher, AeadError};
+pub use error::CryptoError;
 pub use hmac_auth::{HmacAuth, HmacError};
 pub use keyring::{KeyError, KeyId, KeyMaterial, Keyring, KeyringError, RECOMMENDED_KEY_SIZE};
 
