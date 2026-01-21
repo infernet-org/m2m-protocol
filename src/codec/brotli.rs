@@ -71,7 +71,7 @@ impl BrotliCodec {
         Ok(decompressed)
     }
 
-    /// Compress string to wire format: #M2M[v3.0]|DATA:<base64>
+    /// Compress string to wire format: `#M2M[v3.0]|DATA:<base64>`
     pub fn compress(&self, content: &str) -> Result<CompressionResult> {
         let compressed = self.compress_bytes(content.as_bytes())?;
         let encoded = BASE64.encode(&compressed);
