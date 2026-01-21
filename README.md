@@ -3,7 +3,7 @@
 [![Crates.io](https://img.shields.io/crates/v/m2m-core.svg)](https://crates.io/crates/m2m-core)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.82+-orange.svg)](https://www.rust-lang.org/)
-[![Tests](https://img.shields.io/badge/tests-260%20passing-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-268%20passing-brightgreen.svg)]()
 
 **Wire protocol for AI agent communication with inspectable headers and semantic security.**
 
@@ -278,7 +278,7 @@ make model-download
 
 ## Project Status
 
-**Version 0.4.0** — 260+ tests passing.
+**Version 0.4.0** — 268 tests passing.
 
 | Feature | Status |
 |---------|--------|

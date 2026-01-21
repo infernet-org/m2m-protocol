@@ -254,20 +254,33 @@ session_key = HKDF(shared_secret, "m2m-session-v1", 32)
 
 ### 7.8.3 Key Zeroization
 
-Key material SHOULD be zeroized on drop:
+Key material MUST be zeroized on drop to prevent memory disclosure attacks.
+
+**M2M uses the `zeroize` crate for guaranteed zeroization:**
 
 ```rust
-impl Drop for KeyMaterial {
-    fn drop(&mut self) {
-        for byte in &mut self.bytes {
-            *byte = 0;
-        }
-    }
+use zeroize::{Zeroize, ZeroizeOnDrop};
+
+#[derive(Zeroize, ZeroizeOnDrop)]
+pub struct KeyMaterial {
+    bytes: Vec<u8>,
 }
 ```
 
-**Note:** For production use, consider using the `zeroize` crate for
-compiler-guaranteed zeroization.
+**Why `zeroize` instead of manual Drop?**
+
+| Approach | Guarantee | Problem |
+|----------|-----------|---------|
+| Manual zeroing | None | Compiler may optimize away |
+| `zeroize` crate | Compiler barrier | Uses volatile writes |
+
+The `zeroize` crate uses memory barriers and volatile operations to ensure the compiler cannot optimize away the zeroing operation.
+
+**Security Requirements:**
+
+- MUST use `zeroize` crate (or equivalent) for production
+- MUST zeroize keys immediately when no longer needed
+- SHOULD use `ZeroizeOnDrop` derive for automatic cleanup
 
 ### 7.8.4 Nonce Generation
 
@@ -319,9 +332,68 @@ Path:        m2m/v1/test-org/agent-001
 Output:      c87f687fae1cf5991cd0cc64e113ec09750b0d1c41338a41cd8ad90bdd60dba1
 ```
 
-## 7.9 Privacy Considerations
+## 7.9 Error Handling
 
-### 7.9.1 Metadata Exposure
+### 7.9.1 Unified CryptoError
+
+All cryptographic errors are aggregated into a single `CryptoError` type that preserves the error chain:
+
+```rust
+pub enum CryptoError {
+    Aead(#[source] AeadError),
+    Hmac(#[source] HmacError),
+    Key(#[source] KeyError),
+    Keyring(#[source] KeyringError),
+    Nonce(#[source] NonceError),
+    Exchange(#[source] KeyExchangeError),
+    Id(#[source] IdError),
+}
+```
+
+This enables debugging tools to display the complete error context via `std::error::Error::source()`.
+
+### 7.9.2 Epistemic Error Classification
+
+Crypto errors follow epistemic principles:
+
+| Classification | Meaning | Example | Handling |
+|----------------|---------|---------|----------|
+| **B_i falsified** | Runtime belief proven wrong | Invalid key, auth failure | Return `Result` with context |
+| **I^B** | Bounded ignorance | RNG availability | Return `Result`, don't panic |
+| **K_i violated** | Invariant broken (bug) | Should be impossible state | Log, return error |
+
+### 7.9.3 Error Chain Preservation
+
+Crypto errors preserve the full error chain:
+
+```rust
+// Propagation preserves source
+let cipher = AeadCipher::new(key)?;  // AeadError
+let result = cipher.encrypt(...)?;    // AeadError → CryptoError → M2MError
+
+// Walking the chain
+let mut source = err.source();
+while let Some(cause) = source {
+    log::debug!("Caused by: {}", cause);
+    source = cause.source();
+}
+```
+
+### 7.9.4 Security-Sensitive Error Handling
+
+**DO:**
+- Log errors for debugging (without sensitive data)
+- Return generic errors to untrusted clients
+- Preserve error chain for internal debugging
+
+**DON'T:**
+- Include key material in error messages
+- Distinguish between "wrong key" and "corrupted data" to clients
+- Leak timing information through error responses
+
+## 7.10 Privacy Considerations
+
+### 7.10.1 Metadata Exposure
 
 Compression dictionaries are public. However:
 
@@ -329,7 +401,7 @@ Compression dictionaries are public. However:
 - Timing MAY reveal content complexity
 - Session patterns MAY reveal usage patterns
 
-### 7.9.2 Logging Recommendations
+### 7.10.2 Logging Recommendations
 
 Implementations:
 - SHOULD NOT log message payloads by default
@@ -337,35 +409,35 @@ Implementations:
 - MUST NOT log credentials or API keys
 - MAY log metadata (size, algorithm, timing) for debugging
 
-### 7.9.3 Data Retention
+### 7.10.3 Data Retention
 
 - Session state SHOULD be cleared after closure
 - Compression statistics MAY be retained for analytics
 - Security scan results MAY be retained for audit
 
-## 7.10 Implementation Security
+## 7.11 Implementation Security
 
-### 7.10.1 Memory Safety
+### 7.11.1 Memory Safety
 
 - Use memory-safe languages (Rust) when possible
 - Validate all input before processing
 - Clear sensitive data after use
 
-### 7.10.2 Dependency Security
+### 7.11.2 Dependency Security
 
 - Audit dependencies regularly
 - Use dependency scanning (cargo-audit)
 - Pin dependency versions
 
-### 7.10.3 Side Channels
+### 7.11.3 Side Channels
 
 - Constant-time comparison for security-sensitive operations
 - Avoid branching on secret data
 - Consider timing attacks in high-security contexts
 
-## 7.11 Security Checklist
+## 7.12 Security Checklist
 
-### 7.11.1 Deployment Checklist
+### 7.12.1 Deployment Checklist
 
 - [ ] TLS 1.2+ enabled
 - [ ] Certificate validation enabled
@@ -376,7 +448,7 @@ Implementations:
 - [ ] Logging configured (no sensitive data)
 - [ ] Dependency audit completed
 
-### 7.11.2 Development Checklist
+### 7.12.2 Development Checklist
 
 - [ ] Input validation on all message fields
 - [ ] Error messages do not leak sensitive information
