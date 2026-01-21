@@ -269,7 +269,45 @@ impl Drop for KeyMaterial {
 **Note:** For production use, consider using the `zeroize` crate for
 compiler-guaranteed zeroization.
 
-### 7.8.4 Test Vectors
+### 7.8.4 Nonce Generation
+
+ChaCha20-Poly1305 requires unique nonces for each encryption operation with the same key.
+**Nonce reuse completely breaks the security of AEAD encryption.**
+
+**M2M uses fully random 96-bit nonces:**
+
+```
+Nonce: [random: 12 bytes]
+       └─ Generated from CSPRNG (rand::thread_rng)
+```
+
+**Why random nonces instead of counters?**
+
+| Approach | Pros | Cons |
+|----------|------|------|
+| Counter-based | Guaranteed unique | Resets on restart → nonce reuse |
+| Persisted counter | Guaranteed unique | Complex, needs storage |
+| **Random (chosen)** | Stateless, simple | Birthday bound at 2^48 |
+
+For ChaCha20-Poly1305 with 96-bit random nonces:
+- Birthday bound: ~2^48 messages before 50% collision probability
+- At 2^24 messages (~16 million): collision probability ~2^-49
+- For typical M2M sessions: negligible risk
+
+**Security Requirements:**
+
+- MUST use cryptographically secure random number generator (CSPRNG)
+- MUST NOT use predictable or sequential nonces in production
+- MUST NOT reuse nonces with the same key
+- Nonce is prepended to ciphertext (no external state needed for decryption)
+
+**Deterministic nonces (testing only):**
+
+For reproducible tests, `next_nonce_deterministic()` is available but:
+- Only available in test builds (`#[cfg(test)]`)
+- MUST NOT be used in production code
+
+### 7.8.5 Test Vectors
 
 For implementation compatibility, use this test vector:
 
