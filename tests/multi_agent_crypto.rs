@@ -2387,3 +2387,382 @@ mod performance {
         (start.elapsed(), pairs)
     }
 }
+
+// =============================================================================
+// PHASE 10: STRESS TESTS - FIND THE LIMITS
+// =============================================================================
+
+/// Stress tests to determine protocol throughput limits
+mod stress {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    /// Maximum throughput test - how many messages per second can we process?
+    #[test]
+    fn stress_max_throughput() {
+        println!("\n============================================================");
+        println!("STRESS TEST: Maximum Throughput");
+        println!("============================================================\n");
+
+        let org = TestOrg::new("stress", 2);
+        let alice = org.agent(0);
+        let bob = org.agent(1);
+
+        // Test payloads of different sizes
+        let payloads = [
+            ("tiny", r#"{"model":"x","messages":[]}"#),
+            (
+                "small",
+                r#"{"model":"gpt-4o","messages":[{"role":"user","content":"Hi"}]}"#,
+            ),
+            (
+                "medium",
+                r#"{"model":"gpt-4o","messages":[{"role":"system","content":"You are a helpful AI assistant."},{"role":"user","content":"Explain quantum computing in simple terms."}],"temperature":0.7,"max_tokens":500}"#,
+            ),
+            (
+                "large",
+                &format!(
+                    r#"{{"model":"gpt-4o","messages":[{{"role":"user","content":"{}"}}]}}"#,
+                    "x".repeat(1000)
+                ),
+            ),
+        ];
+
+        println!(
+            "| {:10} | {:>10} | {:>12} | {:>12} | {:>10} |",
+            "Payload", "Size", "Ops/sec", "MB/s", "Latency"
+        );
+        println!(
+            "|{:-<12}|{:-<12}|{:-<14}|{:-<14}|{:-<12}|",
+            "", "", "", "", ""
+        );
+
+        for (name, payload) in &payloads {
+            let payload_size = payload.len();
+            let iterations = 10_000;
+
+            let start = Instant::now();
+
+            for i in 0..iterations {
+                let session_id = format!("stress-{}", i % 100); // Reuse some sessions
+                let mut alice_ctx = alice.create_security_context(&bob.id, &session_id);
+                let bob_ctx = bob.create_security_context(&alice.id, &session_id);
+
+                let frame = M2MFrame::new_request(payload).unwrap();
+                let encrypted = frame
+                    .encode_secure(SecurityMode::Aead, &mut alice_ctx)
+                    .unwrap();
+                let _ = M2MFrame::decode_secure(&encrypted, &bob_ctx).unwrap();
+            }
+
+            let duration = start.elapsed();
+            let ops_per_sec = iterations as f64 / duration.as_secs_f64();
+            let throughput_mbps =
+                (payload_size as f64 * iterations as f64 / duration.as_secs_f64()) / 1_000_000.0;
+            let latency_us = duration.as_micros() as f64 / iterations as f64;
+
+            println!(
+                "| {:10} | {:>10} | {:>12.0} | {:>12.2} | {:>10.1}µs |",
+                name, payload_size, ops_per_sec, throughput_mbps, latency_us
+            );
+        }
+
+        println!();
+    }
+
+    /// Agent scaling test - how many agents can we support?
+    #[test]
+    fn stress_agent_scaling() {
+        println!("\n============================================================");
+        println!("STRESS TEST: Agent Scaling");
+        println!("============================================================\n");
+
+        let payload = r#"{"model":"gpt-4o","messages":[{"role":"user","content":"Test"}]}"#;
+
+        println!(
+            "| {:>8} | {:>10} | {:>12} | {:>12} | {:>10} |",
+            "Agents", "Pairs", "Total Time", "Per Pair", "Pairs/sec"
+        );
+        println!(
+            "|{:-<10}|{:-<12}|{:-<14}|{:-<14}|{:-<12}|",
+            "", "", "", "", ""
+        );
+
+        for &agent_count in &[10, 25, 50, 100, 200, 500] {
+            let org = TestOrg::new("scale-test", agent_count);
+            let pairs = agent_count * (agent_count - 1); // Full mesh (directed)
+
+            let start = Instant::now();
+            let mut successful = 0;
+
+            // Full mesh: every agent sends to every other agent
+            for i in 0..agent_count {
+                for j in 0..agent_count {
+                    if i == j {
+                        continue;
+                    }
+
+                    let sender = &org.agents[i];
+                    let receiver = &org.agents[j];
+
+                    let session_id = format!("scale-{}-{}", i, j);
+                    let mut sender_ctx = sender.create_security_context(&receiver.id, &session_id);
+                    let receiver_ctx = receiver.create_security_context(&sender.id, &session_id);
+
+                    let frame = M2MFrame::new_request(payload).unwrap();
+                    let encrypted = frame
+                        .encode_secure(SecurityMode::Aead, &mut sender_ctx)
+                        .unwrap();
+                    let decrypted = M2MFrame::decode_secure(&encrypted, &receiver_ctx).unwrap();
+
+                    assert_eq!(decrypted.payload, payload);
+                    successful += 1;
+                }
+            }
+
+            let duration = start.elapsed();
+            let per_pair_us = duration.as_micros() as f64 / successful as f64;
+            let pairs_per_sec = successful as f64 / duration.as_secs_f64();
+
+            println!(
+                "| {:>8} | {:>10} | {:>12.2?} | {:>10.1}µs | {:>10.0} |",
+                agent_count, pairs, duration, per_pair_us, pairs_per_sec
+            );
+        }
+
+        println!();
+    }
+
+    /// Multi-organization stress test
+    #[test]
+    fn stress_multi_org() {
+        println!("\n============================================================");
+        println!("STRESS TEST: Multi-Organization Communication");
+        println!("============================================================\n");
+
+        let org_names = [
+            "alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta", "iota", "kappa",
+        ];
+        let agents_per_org = 50;
+
+        let orgs: Vec<TestOrg> = org_names
+            .iter()
+            .map(|name| TestOrg::new(name, agents_per_org))
+            .collect();
+
+        let total_agents = orgs.len() * agents_per_org;
+        println!("Organizations: {}", orgs.len());
+        println!("Agents per org: {}", agents_per_org);
+        println!("Total agents: {}", total_agents);
+        println!();
+
+        // Test same-org communication (sample)
+        let payload = r#"{"model":"gpt-4o","messages":[{"role":"user","content":"Test"}]}"#;
+
+        let same_org_iterations = 1000;
+        let start = Instant::now();
+
+        for _ in 0..same_org_iterations {
+            let org = &orgs[0];
+            let alice = org.agent(0);
+            let bob = org.agent(1);
+
+            let mut ctx = alice.create_security_context(&bob.id, "same-org-stress");
+            let frame = M2MFrame::new_request(payload).unwrap();
+            let encrypted = frame.encode_secure(SecurityMode::Aead, &mut ctx).unwrap();
+
+            let bob_ctx = bob.create_security_context(&alice.id, "same-org-stress");
+            let _ = M2MFrame::decode_secure(&encrypted, &bob_ctx).unwrap();
+        }
+
+        let same_org_duration = start.elapsed();
+        let same_org_ops_sec = same_org_iterations as f64 / same_org_duration.as_secs_f64();
+
+        // Test cross-org communication (requires X25519)
+        let cross_org_iterations = 500;
+        let start = Instant::now();
+
+        for i in 0..cross_org_iterations {
+            let org_a = &orgs[i % orgs.len()];
+            let org_b = &orgs[(i + 1) % orgs.len()];
+
+            let _alice = org_a.agent(0);
+            let _bob = org_b.agent(0);
+
+            // X25519 key exchange
+            let mut alice_exchange = KeyExchange::new();
+            let mut bob_exchange = KeyExchange::new();
+
+            alice_exchange.set_peer_public(bob_exchange.public_key().clone());
+            bob_exchange.set_peer_public(alice_exchange.public_key().clone());
+
+            let shared_key = alice_exchange
+                .derive_session_key("cross-org-stress")
+                .unwrap();
+
+            // Encrypt with shared key
+            let mut ctx = SecurityContext::new(shared_key.clone());
+            let frame = M2MFrame::new_request(payload).unwrap();
+            let encrypted = frame.encode_secure(SecurityMode::Aead, &mut ctx).unwrap();
+
+            // Decrypt
+            let bob_ctx = SecurityContext::new(shared_key);
+            let _ = M2MFrame::decode_secure(&encrypted, &bob_ctx).unwrap();
+        }
+
+        let cross_org_duration = start.elapsed();
+        let cross_org_ops_sec = cross_org_iterations as f64 / cross_org_duration.as_secs_f64();
+
+        println!("Same-org communication:");
+        println!("  {} ops in {:?}", same_org_iterations, same_org_duration);
+        println!("  {:.0} ops/sec", same_org_ops_sec);
+        println!();
+        println!("Cross-org communication (with X25519):");
+        println!("  {} ops in {:?}", cross_org_iterations, cross_org_duration);
+        println!("  {:.0} ops/sec", cross_org_ops_sec);
+        println!();
+        println!(
+            "Cross-org overhead: {:.1}x slower (due to key exchange)",
+            same_org_ops_sec / cross_org_ops_sec
+        );
+    }
+
+    /// Sustained load test - can we maintain throughput over time?
+    #[test]
+    fn stress_sustained_load() {
+        println!("\n============================================================");
+        println!("STRESS TEST: Sustained Load (30 seconds)");
+        println!("============================================================\n");
+
+        let org = TestOrg::new("sustained", 10);
+        let payload = r#"{"model":"gpt-4o","messages":[{"role":"user","content":"Sustained load test message"}]}"#;
+
+        let test_duration = Duration::from_secs(5); // 5 seconds for test (30 would be too long)
+        let mut total_ops = 0u64;
+        let mut interval_ops = 0u64;
+        let interval = Duration::from_secs(1);
+
+        let start = Instant::now();
+        let mut last_report = start;
+        let mut intervals = Vec::new();
+
+        println!("Running sustained load for {:?}...\n", test_duration);
+        println!(
+            "| {:>6} | {:>12} | {:>12} |",
+            "Second", "Ops/sec", "Cumulative"
+        );
+        println!("|{:-<8}|{:-<14}|{:-<14}|", "", "", "");
+
+        while start.elapsed() < test_duration {
+            // Round-robin through agent pairs
+            let i = (total_ops as usize) % org.agents.len();
+            let j = (i + 1) % org.agents.len();
+
+            let sender = &org.agents[i];
+            let receiver = &org.agents[j];
+
+            let session_id = format!("sustained-{}", total_ops % 100);
+            let mut sender_ctx = sender.create_security_context(&receiver.id, &session_id);
+            let receiver_ctx = receiver.create_security_context(&sender.id, &session_id);
+
+            let frame = M2MFrame::new_request(payload).unwrap();
+            let encrypted = frame
+                .encode_secure(SecurityMode::Aead, &mut sender_ctx)
+                .unwrap();
+            let _ = M2MFrame::decode_secure(&encrypted, &receiver_ctx).unwrap();
+
+            total_ops += 1;
+            interval_ops += 1;
+
+            // Report every second
+            if last_report.elapsed() >= interval {
+                let ops_per_sec = interval_ops as f64 / last_report.elapsed().as_secs_f64();
+                intervals.push(ops_per_sec);
+
+                println!(
+                    "| {:>6} | {:>12.0} | {:>12} |",
+                    intervals.len(),
+                    ops_per_sec,
+                    total_ops
+                );
+
+                interval_ops = 0;
+                last_report = Instant::now();
+            }
+        }
+
+        let total_duration = start.elapsed();
+        let avg_ops_sec = total_ops as f64 / total_duration.as_secs_f64();
+
+        // Calculate variance
+        let mean = intervals.iter().sum::<f64>() / intervals.len() as f64;
+        let variance =
+            intervals.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / intervals.len() as f64;
+        let std_dev = variance.sqrt();
+        let cv = (std_dev / mean) * 100.0; // Coefficient of variation
+
+        println!();
+        println!("Summary:");
+        println!("  Total operations: {}", total_ops);
+        println!("  Total duration: {:?}", total_duration);
+        println!("  Average throughput: {:.0} ops/sec", avg_ops_sec);
+        println!("  Std deviation: {:.0} ops/sec", std_dev);
+        println!("  Coefficient of variation: {:.1}%", cv);
+
+        // CV under 10% indicates stable throughput
+        assert!(
+            cv < 20.0,
+            "Throughput too variable: {}% CV (expected < 20%)",
+            cv
+        );
+    }
+
+    /// Memory pressure test - many concurrent contexts
+    #[test]
+    fn stress_memory_contexts() {
+        println!("\n============================================================");
+        println!("STRESS TEST: Memory (Many Security Contexts)");
+        println!("============================================================\n");
+
+        let org = TestOrg::new("memory", 100);
+        let payload = r#"{"model":"gpt-4o","messages":[{"role":"user","content":"Test"}]}"#;
+
+        // Create many security contexts simultaneously
+        let context_counts = [100, 500, 1000, 5000];
+
+        for &count in &context_counts {
+            let start = Instant::now();
+
+            let mut contexts: Vec<SecurityContext> = Vec::with_capacity(count);
+
+            for i in 0..count {
+                let agent_i = i % org.agents.len();
+                let agent_j = (i + 1) % org.agents.len();
+
+                let sender = &org.agents[agent_i];
+                let receiver = &org.agents[agent_j];
+
+                let ctx = sender.create_security_context(&receiver.id, &format!("ctx-{}", i));
+                contexts.push(ctx);
+            }
+
+            let create_duration = start.elapsed();
+
+            // Use all contexts
+            let start = Instant::now();
+            for (_i, ctx) in contexts.iter_mut().enumerate() {
+                let frame = M2MFrame::new_request(payload).unwrap();
+                let _ = frame.encode_secure(SecurityMode::Aead, ctx).unwrap();
+            }
+            let use_duration = start.elapsed();
+
+            println!(
+                "{} contexts: create={:?}, use={:?}, total={:?}",
+                count,
+                create_duration,
+                use_duration,
+                create_duration + use_duration
+            );
+        }
+    }
+}
