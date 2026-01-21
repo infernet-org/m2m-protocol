@@ -1,8 +1,8 @@
 # M2M Protocol
 
-[![Crates.io](https://img.shields.io/crates/v/m2m-core.svg)](https://crates.io/crates/m2m-core)
+[![Crates.io](https://img.shields.io/crates/v/m2m-protocol.svg)](https://crates.io/crates/m2m-protocol)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![Rust](https://img.shields.io/badge/rust-1.82+-orange.svg)](https://www.rust-lang.org/)
+[![Rust](https://img.shields.io/badge/rust-1.88+-orange.svg)](https://www.rust-lang.org/)
 [![Tests](https://img.shields.io/badge/tests-268%20passing-brightgreen.svg)]()
 
 **Wire protocol for AI agent communication with inspectable headers and semantic security.**
